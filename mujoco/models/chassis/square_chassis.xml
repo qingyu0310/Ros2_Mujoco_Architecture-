@@ -1,0 +1,12 @@
+<?xml version="1.0"?>
+<!-- 正方形底盘模块：这里只定义可复用默认类，具体尺寸和位置在整机文件里给。 -->
+<mujoco>
+  <default>
+    <default class="square_chassis">
+      <geom type="box" density="500" rgba="0.16 0.18 0.20 1"/>
+    </default>
+    <default class="chassis_corner_marker">
+      <site type="sphere" size="0.004" rgba="1.00 0.78 0.16 1"/>
+    </default>
+  </default>
+</mujoco>

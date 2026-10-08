@@ -1,0 +1,15 @@
+<?xml version="1.0"?>
+<!-- 普通轮子模块：只描述一只刚性圆柱轮。
+     全向轮的轮毂、外圈和被动滚子都在 omni_wheel.xml 里。 -->
+<mujoco>
+  <default>
+    <default class="simple_wheel_joint">
+      <!-- armature 模拟电机转子+减速箱折算到轮轴的惯量：M3508 P19 转子 ≈2.5e-6 × 19.2² ≈ 0.001。
+           别调太小：1 kHz 轮速环的离散稳定上限 kp < 2(½mr²+armature)/dt -->
+      <joint type="hinge" axis="0 1 0" damping="0.001" armature="0.001"/>
+    </default>
+    <default class="simple_wheel_geom">
+      <geom type="cylinder" size="0.076 0.018" mass="0.45" friction="1.0 0.02 0.001" rgba="0.04 0.04 0.04 1" euler="90 0 0"/>
+    </default>
+  </default>
+</mujoco>

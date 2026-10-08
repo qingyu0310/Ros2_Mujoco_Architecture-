@@ -1,0 +1,31 @@
+# 底盘驾驶参数（ros2 run project chassis）。节点自己在 install 里找这个文件，不用带 --params-file
+# 改完要 colcon build --packages-select project 才同步到 install
+# 数值一律写小数点（1.0 不能写 1）：整数跟 double 类型对不上，节点启动就抛异常
+# 单位约定：角度参数写度数（_deg 后缀），控制内部转弧度
+
+/chassis:
+  ros__parameters:
+    control_period_s: 0.001     # 控制拍周期（1 kHz）
+    forward_speed: 0.6          # W/S 满程线速度（m/s），沿枪管方向
+    strafe_speed: 0.6           # A/D 满程线速度（m/s），A 为枪管左侧、D 为枪管右侧；订阅者自己解释 key_down
+    spin_yaw_rate_deg: 360.0    # Shift 按住进入小陀螺模式时的底盘自转角速度（deg/s）
+    # Ctrl 长按：反馈 wrap(q_big + q_small)，目标取最近的 0/90/180/270 度，PID 输出底盘角速度。
+    # 同时按 Ctrl/Shift 时 Ctrl 优先；松开 Ctrl 后按当前 Shift 状态决定是否自转。
+    follow_kp: 3.0
+    follow_ki: 0.0
+    follow_kd: 0.0
+    follow_rate_limit_deg_s: 180.0
+    follow_integral_limit_deg_s: 0.0
+    follow_dead_zone_deg: 0.5
+    follow_input_timeout_s: 0.2
+    kp_wheel: 0.5               # 轮速 PD 增益（占位，升级 LQR+ESO 时删）
+                                # 离散稳定上限 kp < 2J/dt ≈ 6.6（J=½mr²+armature≈3.3e-3），别超
+                                # 别贪大：简化全向轮缺少被动滚子，侧向硬滑的 stick-slip 会进轮速反馈，kp 大了变力矩泵
+    wheel_torque_limit: 3.0     # M3508 P19 持续最大扭矩 3 N·m，对模型 ctrlrange
+    wheel_radius: 0.076         # RM 标准全向轮半径（m），对模型 geom size 第一个值
+
+    # 四轮安装几何（对 square_chassis.xml；yaw 是 XML 里 wheel body 的 euler 第三分量）
+    wheel_names: [front_left_wheel, front_right_wheel, rear_left_wheel, rear_right_wheel]
+    wheel_x: [0.145, 0.145, -0.145, -0.145]
+    wheel_y: [0.145, -0.145, 0.145, -0.145]
+    wheel_yaw_deg: [135.0, 45.0, -135.0, -45.0]

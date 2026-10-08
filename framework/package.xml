@@ -1,0 +1,21 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>framework</name>
+  <version>0.1.0</version>
+  <description>Generic algorithm layer: header-only controllers and filters. ROS-free except for the message definitions under modules/msg/ (see rosidl_default_generators below).</description>
+  <maintainer email="qingyu@example.com">qingyu</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <buildtool_depend>rosidl_default_generators</buildtool_depend>
+
+  <depend>eigen</depend>
+
+  <!-- modules/msg/ 下的消息：生成器（上面那条）+ 运行期的序列化支持 + 进 rosidl 接口包这一组 -->
+  <exec_depend>rosidl_default_runtime</exec_depend>
+  <member_of_group>rosidl_interface_packages</member_of_group>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

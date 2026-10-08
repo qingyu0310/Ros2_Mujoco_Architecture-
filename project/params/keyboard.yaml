@@ -1,0 +1,17 @@
+# 键盘遥控参数（ros2 run project keyboard）。节点自己在 install 里找这个文件，不用带 --params-file
+# 改完要 colcon build --packages-select project 才同步到 install
+# 数值一律写小数点（1.0 不能写 1）：整数跟 double 类型对不上，节点启动就抛异常
+# 这里只负责发布输入状态；方向、速度和控制含义由具体控制节点自己解释。
+# keyboard 节点会开一个 GLFW 输入窗口；窗口有焦点时读取 26 键、Shift 和鼠标 dx/dy，F11 切换全屏。
+# 鼠标 raw_dx/raw_dy 是像素差；mouse_dx/mouse_dy 是 raw * sensitivity 后 clamp 到 [-1, 1] 的归一化轴值。
+
+/keyboard:
+  ros__parameters:
+    topic_keyboard_: /keyboard    # 发 framework/msg/KeyboardState（旧 bool + 26 键数组 + 鼠标位移）
+    publish_period_s: 0.001       # 重发周期；松手也照发"全 0"
+    window_title: "Dust Teleop"
+    window_width: 640
+    window_height: 360
+    capture_mouse: false          # 启动时不捕获；窗口聚焦后按 P 才隐藏并锁定鼠标
+    mouse_sensitivity_x: 0.01      # 每像素缩放系数：mouse_dx = clamp(raw_dx * sensitivity, -1, 1)
+    mouse_sensitivity_y: 0.01

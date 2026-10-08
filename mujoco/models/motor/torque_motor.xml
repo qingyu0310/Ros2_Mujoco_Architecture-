@@ -1,0 +1,33 @@
+<?xml version="1.0"?>
+<!-- 力矩电机：把关节当成一个"给多少力矩就出多少力"的执行器，用 MJCF 自带的 <motor> 实现。
+
+     它是什么：
+       直接力/力矩执行器，不含任何闭环。SimNode 每拍把力矩写进 data->ctrl，MuJoCo 把它乘 gear
+       加到对应关节上；控制律（10×4 LQR、腿长阻抗、VMC）全在我们自己的节点里。
+
+     它不是什么：
+       不是电机模型。没有力矩常数 Kt、反电动势、电流环、力矩-转速曲线。仿真里唯一的力矩上限是
+       ctrlrange（ctrllimited 默认 auto，写了 ctrlrange 就自动限幅）和关节自己的 actuatorfrcrange，
+       物理引擎直接截断。真机转速越高力矩越小，仿真里不体现 —— 所以仿真会比真机好控。
+
+     gear="1" 的含意：
+       <motor> 施加的是 gear × ctrl，所以 gear=1 时 ctrl 就是关节力矩本身，单位 N·m，
+       原始值、不做归一化（转动关节 N·m、移动关节 N）。
+
+     ctrl 的排列顺序 = <actuator> 段里各执行器的先后顺序，不是关节名。
+       节点按名字查 actuator id 再写 ctrl；改了这里的顺序就等于改了 ctrl 的列序。
+
+     用法：<default> 必须出现在 <worldbody> / <actuator> 之前，所以在那里 include 本文件，然后写：
+       <include file="../models/motor/torque_motor.xml"/>
+       ...
+       <motor class="motor" name="left_hip" joint="left_hip_joint" ctrlrange="-1.5 1.5"/>
+
+     与速度电机的关系：
+       MuJoCo 对应的速度执行器元素是 <velocity>。本项目走力矩路线，不用它；同一个关节也不要挂两个执行器。 -->
+<mujoco>
+  <default>
+    <default class="motor">
+      <motor gear="1"/>
+    </default>
+  </default>
+</mujoco>

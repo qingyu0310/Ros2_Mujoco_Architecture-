@@ -1,0 +1,66 @@
+# 云台参数（ros2 run project gimbal）。节点自己在 install 里找这个文件，不用带 --params-file
+# 改完要 colcon build --packages-select project 才同步到 install
+# 数值一律写小数点（1.0 不能写 1）：整数跟 double 类型对不上，节点启动就抛异常
+# 一个入口两个节点：/yaw 和 /pitch 各占一段，段名必须跟进程里那两个节点名对上，否则参数全落到默认值
+# yaw 以本文件和 ros2_layer/node/gimbal/yaw.hpp 的当前实现为准，pitch 见 docs/pitch俯仰控制规划.md
+
+/yaw:
+  ros__parameters:
+    control_period_s: 0.001
+    # 角度参数一律写度数，节点内部转弧度再控制（约定：参数=度，控制=rad）
+    target_rate_limit_deg: 180.0
+    small_yaw_soft_limit_deg: 60.0
+    mouse_yaw_sensitivity: -5.0
+    big_yaw_ctrl_limit: 7.0
+    small_yaw_ctrl_limit: 7.0
+    # 大 yaw 相对关节角闭环，小 yaw IMU 世界角闭环。
+    # 改模型尺寸时同步改。
+    j_big: 0.0025
+    j_small: 0.0022
+
+    # 关节折算到输出轴的转子惯量，对模型 XML 的 armature（gimbal_yaw_joint 里 0.0018）。
+    # 加在 M 的对角上。
+    armature_big: 0.0018
+    armature_small: 0.0018
+
+    # 数组顺序：[大 yaw, 小 yaw]。大轴状态=[关节角误差, 关节速度]；
+    # 小轴状态=[IMU 世界角误差, 世界角速度误差]，两个 LQR 的目标均为零。
+    q_pos: [1000.0, 20.0]
+    q_vel: [1.0, 1.0]
+    r: [1.0, 1.0]
+    big_yaw_joint: "big_yaw_joint"
+    small_yaw_joint: "small_yaw_joint"
+    keyboard_topic: "/keyboard"
+    joint_states_topic: "/joint_states"
+    motor_topic_prefix: "/motor"
+    # 直接使用 IMU 节点已经解算好的欧拉角和角速度，不在 yaw 节点重复解析四元数。
+    yaw_angle_topic: "/gimbal/imu/euler_rad"
+    yaw_rate_topic: "/gimbal/imu/angular_velocity"
+
+/pitch:
+  ros__parameters:
+    control_period_s: 0.001
+    mouse_pitch_sensitivity: 15.0
+
+    # 角度参数一律写度数，节点内部转弧度再控制。
+    pitch_target_deg: 0.0
+    pitch_target_rate_limit_deg: 90.0
+    pitch_soft_limit_deg: 25.0
+
+    pitch_ctrl_limit: 7.0
+    j_pitch: 0.00035
+    pitch_q_pos: 20.0
+    pitch_q_vel: 1.0
+    pitch_r: 1.0
+
+    # pitch 轴水平，枪管/摩擦轮在局部 +X 偏心；没有重力前馈时 0 度也会被重力拖下去。
+    # tau_g = sign * mass * 9.81 * com_x * cos(q)
+    pitch_gravity_comp_enable: true  # 第二轮开启重力补偿，与无补偿基线对比
+    pitch_gravity_comp_mass: 0.05
+    pitch_gravity_comp_com_x: 0.065
+    pitch_gravity_comp_sign: -1.0
+
+    pitch_joint: "pitch_pitch_joint"
+    keyboard_topic: "/keyboard"
+    joint_states_topic: "/joint_states"
+    motor_topic_prefix: "/motor"

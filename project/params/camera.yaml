@@ -1,0 +1,25 @@
+# 摄像头显示参数。project/camera 入口从 share/project/params/camera.yaml 加载。
+# launch 只负责启动和节点命名；同一可执行程序按节点名选择对应参数段。
+/camera:
+  ros__parameters:
+    image_topic: "/gimbal/camera/image_raw"
+    window_title: "Dust Camera"
+    window_width: 640
+    window_height: 360
+    refresh_period_s: 0.016
+
+/gimbal_camera:
+  ros__parameters:
+    image_topic: "/gimbal/camera/image_raw"
+    window_title: "Dust Teleop"
+    window_width: 640
+    window_height: 360
+    refresh_period_s: 0.016
+
+/overhead_camera:
+  ros__parameters:
+    image_topic: "/chassis/camera/image_raw"
+    window_title: "Dust Overhead Camera"
+    window_width: 480
+    window_height: 360
+    refresh_period_s: 0.016

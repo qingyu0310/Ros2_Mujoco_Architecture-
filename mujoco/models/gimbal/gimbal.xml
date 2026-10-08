@@ -1,0 +1,27 @@
+<?xml version="1.0"?>
+<!-- 云台模块：只定义可复用默认类，具体尺寸、位置、质量在整机文件里给。
+
+     结构约定：yaw 轴沿局部 Z 轴（竖直方向），关节是 hinge，所以云台只负责水平转向；
+     大 yaw（底座级）和小 yaw（平台级）用同一套默认类，整机文件里各给各的参数。
+
+     用法：在 <worldbody> 之前 include 本文件，然后写：
+       <include file="../models/gimbal/gimbal.xml"/>
+       ...
+       <body name="big_yaw_link" pos="...">
+         <joint name="big_yaw_joint" class="gimbal_yaw_joint"/>
+         <geom name="big_yaw_base" class="gimbal_base_geom" size="..." mass="..."/>
+       </body> -->
+<mujoco>
+  <default>
+    <default class="gimbal_yaw_joint">
+      <!-- armature = DM4310P 转子惯量 1.8e-5 × 减速比 10² ≈ 0.0018（折算到输出轴） -->
+      <joint type="hinge" axis="0 0 1" damping="0.002" armature="0.0018"/>
+    </default>
+    <default class="gimbal_base_geom">
+      <geom type="cylinder" density="700" rgba="0.18 0.20 0.28 1"/>
+    </default>
+    <default class="gimbal_center_marker">
+      <site type="sphere" size="0.003" rgba="1.00 0.82 0.20 1"/>
+    </default>
+  </default>
+</mujoco>

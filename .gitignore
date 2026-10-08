@@ -1,0 +1,14 @@
+# colcon 的产物：本机编出来的，不进仓库
+build/
+install/
+log/
+
+# Python 缓存
+__pycache__/
+*.py[cod]
+
+# 强化学习本地环境与训练产物
+rl/venv/
+rl/.venv/
+rl/policies/
+rl/runs/

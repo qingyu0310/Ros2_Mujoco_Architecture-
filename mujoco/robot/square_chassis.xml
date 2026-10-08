@@ -1,0 +1,98 @@
+<?xml version="1.0"?>
+<!-- 四轮 O 型底盘预览（RoboMaster 步兵量级：0.32x0.32 m、约 10 kg）。
+     坐标约定：X 前后、Y 左右、Z 向上。底盘顶视图是正方形，
+     四个轮子的关节中心放在正方形四个顶点处，轮轴从各角点指向底盘中心。
+     电机参数按真机给：底盘轮 M3508 P19（持续扭矩 3 N·m、19.2:1、365 g），
+     云台双轴达妙 DM4310P（额定 3 N·m、峰值 7 N·m、10:1、300 g）。 -->
+<mujoco model="square_chassis">
+  <compiler angle="degree" autolimits="true"/>
+
+  <!-- 世界负责地形、光照和物理选项；整机只负责机器人。 -->
+  <include file="../worlds/empty.xml"/>
+  <include file="../models/chassis/square_chassis.xml"/>
+  <include file="../models/gimbal/gimbal.xml"/>
+  <include file="../models/motor/torque_motor.xml"/>
+
+  <asset>
+    <model name="omni_wheel" file="../models/wheel/omni_wheel.xml"/>
+    <model name="pitch_unit" file="../models/gimbal/pitch.xml"/>
+  </asset>
+
+  <worldbody>
+    <!-- 轮半径 0.076（RM 标准全向轮直径 152.5 mm），轮心高度 = 半径 -->
+    <body name="base_link" pos="0 0 0.076">
+      <freejoint name="base_freejoint"/>
+
+      <!-- 0.32x0.32 m 底板 6 kg；整车总重 ≈ 6 + 4×0.8(轮+电机) + 1.4(云台) ≈ 10.6 kg -->
+      <geom name="base_plate" class="square_chassis" size="0.16 0.16 0.01" mass="6.0"/>
+
+      <site name="front_left_corner"  class="chassis_corner_marker" pos=" 0.16  0.16 0"/>
+      <site name="front_right_corner" class="chassis_corner_marker" pos=" 0.16 -0.16 0"/>
+      <site name="rear_left_corner"   class="chassis_corner_marker" pos="-0.16  0.16 0"/>
+      <site name="rear_right_corner"  class="chassis_corner_marker" pos="-0.16 -0.16 0"/>
+
+      <!-- 大小 yaw 云台：大 yaw 是底座级，立在底盘顶面（局部 z=0.01）；小 yaw 是大 yaw 的子体，两级纯偏航串联。
+           大 yaw 半径 0.07、半高 0.05：body 底面贴底盘顶面（z=0.06），顶面在局部 z=0.11，小 yaw 和指示棒都挂在那。
+           每级各带一根橙色横向指示棒（euler="0 90 0" 把圆柱放平指向 +X），yaw 一转指向就跟着变。
+           质量含 DM4310P 本体（300 g）+ 结构件。 -->
+      <body name="big_yaw_link" pos="0 0 0.06">
+        <joint name="big_yaw_joint" class="gimbal_yaw_joint"/>
+        <geom name="big_yaw_base"   class="gimbal_base_geom" size="0.07 0.05" mass="1.0" rgba="0.42 0.22 0.80 1"/>
+        <geom name="big_yaw_pointer" type="cylinder" pos="0.055 0 0.00" euler="0 90 0" size="0.006 0.025" mass="0.01" rgba="1.00 0.62 0.08 1"/>
+
+        <!-- 底面贴大 yaw 顶面：相对位置 = 大半高 0.05 + 小半高 0.03 -->
+        <body name="small_yaw_link" pos="0 0 0.08">
+          <!-- range 是物理约束（±120°）：软约束在控制器里，这里是最后保险。
+               注意单位：compiler angle="degree"，range 写度数不写弧度！ -->
+          <joint name="small_yaw_joint" class="gimbal_yaw_joint" range="-120 120"/>
+          <geom name="small_yaw_base"   class="gimbal_base_geom" pos="0 0 0.0" size="0.05 0.03" mass="0.4" rgba="0.06 0.68 0.58 1"/>
+
+          <!-- pitch 机构放到 small yaw 右侧：pitch 圆柱高度轴沿局部 Y，
+               pitch_link 原点 y = -(small_yaw 半径 0.05 + pitch 半长 0.028) = -0.078，
+               让 pitch 圆柱靠内侧的圆形端面贴在 small yaw 圆柱外壁上。
+               枪管沿 pitch 局部 +X 从 pitch 轴的半径方向伸出。 -->
+          <frame pos="0 -0.078 0">
+            <attach model="pitch_unit" body="pitch_link" prefix="pitch_"/>
+          </frame>
+        </body>
+      </body>
+
+      <!-- 单个成品全向轮模型在 models/wheel/omni_wheel.xml；这里只负责四个安装位姿和名字前缀。 -->
+      <frame pos="0.145 0.145 0" euler="0 0 135">
+        <attach model="omni_wheel" body="wheel_link" prefix="front_left_"/>
+      </frame>
+      <frame pos="0.145 -0.145 0" euler="0 0 45">
+        <attach model="omni_wheel" body="wheel_link" prefix="front_right_"/>
+      </frame>
+      <frame pos="-0.145 0.145 0" euler="0 0 -135">
+        <attach model="omni_wheel" body="wheel_link" prefix="rear_left_"/>
+      </frame>
+      <frame pos="-0.145 -0.145 0" euler="0 0 -45">
+        <attach model="omni_wheel" body="wheel_link" prefix="rear_right_"/>
+      </frame>
+
+    </body>
+  </worldbody>
+
+  <!-- ctrlrange 按电机真机扭矩：M3508 持续 3 N·m；DM4310P 峰值 7 N·m（额定 3，持续输出别超） -->
+  <actuator>
+    <motor name="front_left_wheel"  class="motor" joint="front_left_wheel_joint"  ctrlrange="-3.0 3.0"/>
+    <motor name="front_right_wheel" class="motor" joint="front_right_wheel_joint" ctrlrange="-3.0 3.0"/>
+    <motor name="rear_left_wheel"   class="motor" joint="rear_left_wheel_joint"   ctrlrange="-3.0 3.0"/>
+    <motor name="rear_right_wheel"  class="motor" joint="rear_right_wheel_joint"  ctrlrange="-3.0 3.0"/>
+    <motor name="big_yaw"           class="motor" joint="big_yaw_joint"           ctrlrange="-7.0 7.0"/>
+    <motor name="small_yaw"         class="motor" joint="small_yaw_joint"         ctrlrange="-7.0 7.0"/>
+    <motor name="pitch"             class="motor" joint="pitch_pitch_joint"       ctrlrange="-7.0 7.0"/>
+    <motor name="friction_wheel_l"  class="motor" joint="pitch_barrel_friction_wheel_l_joint" ctrlrange="-1.0 1.0"/>
+    <motor name="friction_wheel_r"  class="motor" joint="pitch_barrel_friction_wheel_r_joint" ctrlrange="-1.0 1.0"/>
+  </actuator>
+
+  <!-- 云台 IMU：pitch_link 全名是 pitch_pitch_link（attach 前缀 pitch_），
+       站点全名 pitch_gimbal_imu_site。SimNode 按名字找到后发到 /gimbal/imu，
+       小陀螺时用它做枪管世界姿态闭环，不再只看电机相对角。 -->
+  <sensor>
+    <framequat name="gimbal_imu_quat" objtype="body" objname="pitch_pitch_link"/>
+    <gyro name="gimbal_imu_gyro" site="pitch_gimbal_imu_site"/>
+    <accelerometer name="gimbal_imu_accel" site="pitch_gimbal_imu_site"/>
+  </sensor>
+</mujoco>

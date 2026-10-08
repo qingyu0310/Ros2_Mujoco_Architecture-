@@ -1,0 +1,69 @@
+<?xml version="1.0"?>
+<!-- 单个 pitch 机构原型。
+     robot 层把 pitch_link 的原点放在小 yaw 圆柱侧面：
+       small_yaw 半径 0.05 m，pitch 圆柱半长 0.028 m，
+       pitch_link 原点 y=0.078，让 pitch 圆柱一侧圆形底面贴在 small yaw 圆柱外壁上。
+
+     坐标：
+       X：枪管向前；枪管沿 pitch 圆柱的半径方向生成。
+       Y：pitch 圆柱高度方向，也是 pitch 关节轴，像轮子绕轮轴转。
+       Z：向上。
+       euler 使用 degree。 -->
+<mujoco model="pitch_unit">
+  <compiler angle="degree" autolimits="true"/>
+
+  <asset>
+    <model name="barrel_unit" file="../barrel/barrel.xml"/>
+  </asset>
+
+  <default>
+    <!-- pitch 关节：绕局部 Y 轴俯仰。
+         range 暂设 +/-35 deg，避免枪管大角度穿过云台本体。 -->
+    <default class="pitch_joint">
+      <joint type="hinge" axis="0 1 0" damping="0.002" armature="0.0018" range="-35 35"/>
+    </default>
+
+    <!-- pitch 小圆柱：模拟 pitch 电机/轴承座。
+         cylinder size="半径 半长"，默认轴是 Z；euler="90 0 0" 把圆柱轴转到 Y。
+         圆柱一侧圆形底面贴 small yaw 圆柱侧壁，不能用侧壁相切来冒充。
+         pitch_joint 仍绕局部 Y 轴俯仰。 -->
+    <default class="pitch_motor_geom">
+      <geom type="cylinder" size="0.024 0.028" mass="0.25" euler="90 0 0" rgba="0.00 0.62 0.78 1"/>
+    </default>
+
+    <default class="pitch_axis_marker">
+      <site type="sphere" size="0.003" rgba="1.00 0.92 0.25 1"/>
+    </default>
+
+    <default class="pitch_camera_marker">
+      <site type="box" size="0.008 0.005 0.004" rgba="0.08 0.10 0.12 1"/>
+    </default>
+  </default>
+
+  <worldbody>
+    <body name="pitch_link">
+      <joint name="pitch_joint" class="pitch_joint"/>
+      <geom name="pitch_motor" class="pitch_motor_geom"/>
+      <site name="pitch_axis" class="pitch_axis_marker"/>
+
+      <!-- 头顶观察视点固定在 pitch 坐标系上方，随 pitch 和两级 yaw 转动。
+           零位朝下、画面上方沿枪管 +X；仅观察视点，无实体质量。 -->
+      <camera name="overhead_camera" pos="0 0 1.5" xyaxes="0 -1 0 1 0 0" fovy="70"/>
+
+      <!-- 云台 IMU：放在 pitch 轴线上（原点），随 big/small yaw 和 pitch 一起动，
+           直接反映枪管所在刚体的世界姿态。装轴线上是为了小陀螺时少受
+           a = alpha x r + omega x (omega x r) 的平移放大。
+           经 robot 层 attach 前缀后全名是 pitch_gimbal_imu_site，
+           传感器（gimbal_imu_quat/gyro/accel）在整机 XML 里按全名引用。 -->
+      <site name="gimbal_imu_site" pos="0 0 0" size="0.003" rgba="1.00 0.20 0.60 1"/>
+
+      <!-- 第一人称摄像头：放在 pitch 轴附近，随 pitch/yaw 一起动，朝局部 +X（枪管方向）看。
+           MuJoCo camera 默认沿局部 -Z 看；xyaxes 让 camera -Z 对齐 pitch 局部 +X。 -->
+      <camera name="camera" pos="0.030 0 0.018" xyaxes="0 -1 0 0 0 1" fovy="70"/>
+      <site name="camera_marker" class="pitch_camera_marker" pos="0.030 0 0.018"/>
+
+      <!-- 独立枪管模型挂在 pitch 子体下，随 pitch_joint 俯仰。 -->
+      <attach model="barrel_unit" body="barrel_link" prefix="barrel_"/>
+    </body>
+  </worldbody>
+</mujoco>

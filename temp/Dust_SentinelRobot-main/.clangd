@@ -1,0 +1,38 @@
+CompileFlags:
+  Add:
+    # 核心：强制指定为 ARM 目标
+    - --target=arm-none-eabi
+    
+    # ARM 参数
+    - -mcpu=cortex-m4
+    - -mthumb
+    - -mfloat-abi=hard
+    - -mfpu=fpv4-sp-d16
+    
+    # 编译器特性
+    - -fno-exceptions
+    - -fno-rtti
+    - -ffunction-sections
+    - -fdata-sections
+    
+    # 包含路径
+    - -IC:/Program Files/Path/gcc-arm-none-eabi/arm-none-eabi/include/c++/14.2.1
+    - -IC:/Program Files/Path/gcc-arm-none-eabi/arm-none-eabi/include/c++/14.2.1/arm-none-eabi
+    - -IC:/Program Files/Path/gcc-arm-none-eabi/arm-none-eabi/include
+    - -IC:/Program Files/Path/gcc-arm-none-eabi/lib/gcc/arm-none-eabi/14.2.1/include
+    - -IC:/Program Files/Path/gcc-arm-none-eabi/lib/gcc/arm-none-eabi/14.2.1/include-fixed
+    
+    # 项目路径
+    - -I.
+    - -I./include
+    - -I./src
+    
+  Remove:
+    - -mthumb-interwork
+
+Diagnostics:
+  Suppress:
+    - unused-includes
+    - unknown_typename
+    - unknown_typename_suggest
+    - typename_requires_specqual

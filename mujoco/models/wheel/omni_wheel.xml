@@ -1,0 +1,161 @@
+<?xml version="1.0"?>
+<!-- 单个成品全向轮原型。
+     robot 层通过 <attach model="omni_wheel" body="wheel_link" prefix="..."/> 实例化四个轮子。
+
+     坐标和单位：
+       X/Z：轮子径向平面，轮缘滚子绕 Y 轴排布。
+       Y：主轮轴方向，也是电机驱动轴方向。
+       长度单位：m；质量单位：kg；角度单位：degree。
+       euler 使用 degree；axis/fromto 是方向向量和局部坐标，不是角度。 -->
+<mujoco model="omni_wheel">
+  <compiler angle="degree" autolimits="true"/>
+
+  <default>
+    <!-- 主轮关节：电机驱动的轮轴。
+         axis="0 1 0" 表示绕局部 Y 轴转。
+         damping 是轮轴粘性阻尼；armature 是电机转子和减速箱折算到轮轴的惯量。
+         M3508 P19 转子惯量近似：2.5e-6 * 19.2^2 = 0.00092，取 0.001。 -->
+    <default class="omni_wheel_joint">
+      <joint type="hinge" axis="0 1 0" damping="0.001" armature="0.001"/>
+    </default>
+
+    <!-- 中间轮毂：黑色主圆柱，只做惯量和可视化，不参与接触。
+         cylinder 的 size="半径 半长"；euler="90 0 0" 把圆柱轴转到局部 Y 轴。
+         contype/conaffinity 设为 0，避免轮毂和地面接触，接触只交给外圈滚子。 -->
+    <default class="omni_wheel_hub_geom">
+      <geom type="cylinder" size="0.045 0.015" mass="0.45" rgba="0.04 0.04 0.04 1" euler="90 0 0" contype="0" conaffinity="0"/>
+    </default>
+
+    <!-- 两侧外轮毂盘：左右各一片薄圆盘，只做可视化和少量质量，不参与接触。
+         size="外盘半径 外盘半厚度"。 -->
+    <default class="omni_wheel_outer_hub_geom">
+      <geom type="cylinder" size="0.055 0.003" mass="0.06" rgba="0.12 0.12 0.12 1" euler="90 0 0" contype="0" conaffinity="0"/>
+    </default>
+
+    <!-- 被动滚子关节：每个黑色小滚子都能绕自己的切向轴自由转。
+         axis 在每个滚子 body 中单独指定，方向为轮缘切线。 -->
+    <default class="omni_roller_joint">
+      <joint type="hinge" damping="0.0002" armature="0.00002"/>
+    </default>
+
+    <!-- 被动滚子几何：capsule 的 size 是胶辊半径。
+         fromto 在每个滚子里指定，表示胶辊轴线两端点。
+         friction="滑动 扭转 滚动"；这里降低扭转/滚动摩擦，让滚子能释放侧向滑动。 -->
+    <default class="omni_roller_geom">
+      <geom type="capsule" size="0.010" mass="0.02" friction="1.0 0.005 0.0001" rgba="0.03 0.03 0.035 1"/>
+    </default>
+
+    <!-- 轮心标记点：只用于可视化/调试。 -->
+    <default class="omni_wheel_center_marker">
+      <site type="sphere" size="0.0035" rgba="1.00 0.32 0.18 1"/>
+    </default>
+  </default>
+
+  <worldbody>
+    <!-- 成品轮根 body。
+         attach 后会被自动加前缀，例如 front_left_wheel_link/front_left_wheel_joint。
+         主轮不直接接触地面，实际接触由下面两排 16 个滚子承担。 -->
+    <body name="wheel_link">
+      <joint name="wheel_joint" class="omni_wheel_joint"/>
+      <geom name="wheel_hub" class="omni_wheel_hub_geom"/>
+
+      <!-- 左右两片外轮毂盘：pos.y = +/-0.015 m。 -->
+      <geom name="wheel_outer_hub_l" class="omni_wheel_outer_hub_geom" pos="0 0.015 0"/>
+      <geom name="wheel_outer_hub_r" class="omni_wheel_outer_hub_geom" pos="0 -0.015 0"/>
+
+      <!-- 左排滚子：
+           轮缘中心半径 R = 0.064 m，排布在 y = +0.014 m。
+           角度 theta_deg = 0,45,90,...,315，均为度。
+           pos = [R*cos(theta), +0.014, R*sin(theta)]。
+           axis = [-sin(theta), 0, cos(theta)]，是滚子自转轴方向。
+           fromto 的两点沿 axis 方向，半长 = 0.016 m。 -->
+      <body name="roller_l_0" pos="0.064 0.014 0">
+        <!-- theta_deg = 0 -->
+        <joint name="roller_l_0_joint" class="omni_roller_joint" axis="0 0 1"/>
+        <geom name="roller_l_0" class="omni_roller_geom" fromto="0 0 -0.016 0 0 0.016"/>
+      </body>
+      <body name="roller_l_1" pos="0.045255 0.014 0.045255">
+        <!-- theta_deg = 45 -->
+        <joint name="roller_l_1_joint" class="omni_roller_joint" axis="-0.707107 0 0.707107"/>
+        <geom name="roller_l_1" class="omni_roller_geom" fromto="0.011314 0 -0.011314 -0.011314 0 0.011314"/>
+      </body>
+      <body name="roller_l_2" pos="0 0.014 0.064">
+        <!-- theta_deg = 90 -->
+        <joint name="roller_l_2_joint" class="omni_roller_joint" axis="-1 0 0"/>
+        <geom name="roller_l_2" class="omni_roller_geom" fromto="0.016 0 0 -0.016 0 0"/>
+      </body>
+      <body name="roller_l_3" pos="-0.045255 0.014 0.045255">
+        <!-- theta_deg = 135 -->
+        <joint name="roller_l_3_joint" class="omni_roller_joint" axis="-0.707107 0 -0.707107"/>
+        <geom name="roller_l_3" class="omni_roller_geom" fromto="0.011314 0 0.011314 -0.011314 0 -0.011314"/>
+      </body>
+      <body name="roller_l_4" pos="-0.064 0.014 0">
+        <!-- theta_deg = 180 -->
+        <joint name="roller_l_4_joint" class="omni_roller_joint" axis="0 0 -1"/>
+        <geom name="roller_l_4" class="omni_roller_geom" fromto="0 0 0.016 0 0 -0.016"/>
+      </body>
+      <body name="roller_l_5" pos="-0.045255 0.014 -0.045255">
+        <!-- theta_deg = 225 -->
+        <joint name="roller_l_5_joint" class="omni_roller_joint" axis="0.707107 0 -0.707107"/>
+        <geom name="roller_l_5" class="omni_roller_geom" fromto="-0.011314 0 0.011314 0.011314 0 -0.011314"/>
+      </body>
+      <body name="roller_l_6" pos="0 0.014 -0.064">
+        <!-- theta_deg = 270 -->
+        <joint name="roller_l_6_joint" class="omni_roller_joint" axis="1 0 0"/>
+        <geom name="roller_l_6" class="omni_roller_geom" fromto="-0.016 0 0 0.016 0 0"/>
+      </body>
+      <body name="roller_l_7" pos="0.045255 0.014 -0.045255">
+        <!-- theta_deg = 315 -->
+        <joint name="roller_l_7_joint" class="omni_roller_joint" axis="0.707107 0 0.707107"/>
+        <geom name="roller_l_7" class="omni_roller_geom" fromto="-0.011314 0 -0.011314 0.011314 0 0.011314"/>
+      </body>
+
+      <!-- 右排滚子：
+           轮缘中心半径 R = 0.064 m，排布在 y = -0.014 m。
+           相对左排错开半个节距：theta_deg = 22.5,67.5,...,337.5。
+           其余 pos/axis/fromto 规则与左排相同。 -->
+      <body name="roller_r_0" pos="0.059128 -0.014 0.024492">
+        <!-- theta_deg = 22.5 -->
+        <joint name="roller_r_0_joint" class="omni_roller_joint" axis="-0.382683 0 0.92388"/>
+        <geom name="roller_r_0" class="omni_roller_geom" fromto="0.006123 0 -0.014782 -0.006123 0 0.014782"/>
+      </body>
+      <body name="roller_r_1" pos="0.024492 -0.014 0.059128">
+        <!-- theta_deg = 67.5 -->
+        <joint name="roller_r_1_joint" class="omni_roller_joint" axis="-0.92388 0 0.382683"/>
+        <geom name="roller_r_1" class="omni_roller_geom" fromto="0.014782 0 -0.006123 -0.014782 0 0.006123"/>
+      </body>
+      <body name="roller_r_2" pos="-0.024492 -0.014 0.059128">
+        <!-- theta_deg = 112.5 -->
+        <joint name="roller_r_2_joint" class="omni_roller_joint" axis="-0.92388 0 -0.382683"/>
+        <geom name="roller_r_2" class="omni_roller_geom" fromto="0.014782 0 0.006123 -0.014782 0 -0.006123"/>
+      </body>
+      <body name="roller_r_3" pos="-0.059128 -0.014 0.024492">
+        <!-- theta_deg = 157.5 -->
+        <joint name="roller_r_3_joint" class="omni_roller_joint" axis="-0.382683 0 -0.92388"/>
+        <geom name="roller_r_3" class="omni_roller_geom" fromto="0.006123 0 0.014782 -0.006123 0 -0.014782"/>
+      </body>
+      <body name="roller_r_4" pos="-0.059128 -0.014 -0.024492">
+        <!-- theta_deg = 202.5 -->
+        <joint name="roller_r_4_joint" class="omni_roller_joint" axis="0.382683 0 -0.92388"/>
+        <geom name="roller_r_4" class="omni_roller_geom" fromto="-0.006123 0 0.014782 0.006123 0 -0.014782"/>
+      </body>
+      <body name="roller_r_5" pos="-0.024492 -0.014 -0.059128">
+        <!-- theta_deg = 247.5 -->
+        <joint name="roller_r_5_joint" class="omni_roller_joint" axis="0.92388 0 -0.382683"/>
+        <geom name="roller_r_5" class="omni_roller_geom" fromto="-0.014782 0 0.006123 0.014782 0 -0.006123"/>
+      </body>
+      <body name="roller_r_6" pos="0.024492 -0.014 -0.059128">
+        <!-- theta_deg = 292.5 -->
+        <joint name="roller_r_6_joint" class="omni_roller_joint" axis="0.92388 0 0.382683"/>
+        <geom name="roller_r_6" class="omni_roller_geom" fromto="-0.014782 0 -0.006123 0.014782 0 0.006123"/>
+      </body>
+      <body name="roller_r_7" pos="0.059128 -0.014 -0.024492">
+        <!-- theta_deg = 337.5 -->
+        <joint name="roller_r_7_joint" class="omni_roller_joint" axis="0.382683 0 0.92388"/>
+        <geom name="roller_r_7" class="omni_roller_geom" fromto="-0.006123 0 -0.014782 0.006123 0 0.014782"/>
+      </body>
+
+      <site name="wheel_center" class="omni_wheel_center_marker"/>
+    </body>
+  </worldbody>
+</mujoco>

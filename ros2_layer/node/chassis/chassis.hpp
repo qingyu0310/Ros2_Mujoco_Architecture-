@@ -23,6 +23,8 @@
 #include <string>
 #include <vector>
 
+#include <Eigen/Dense>
+#include "framework/msg/chassis_velocity.hpp"
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/joint_state.hpp>
 #include <std_msgs/msg/float64.hpp>
@@ -45,6 +47,7 @@ public:
         validate_wheel_parameters();
         configure_follow_pid();
         build_wheel_geometry();
+        configure_velocity_estimator();
         setup_ros_interfaces();
         start_control_timer();
     }
@@ -58,6 +61,7 @@ private:
         std::string joint_states {"/joint_states"};
         std::string keyboard {"/keyboard"};
         std::string motor_prefix {"/motor"};
+        std::string velocity {"/chassis/velocity"};
     };
 
     /**
@@ -188,6 +192,16 @@ private:
 
     GimbalSample gimbal_ {};
     std::vector<WheelState> wheels_;
+    /**
+     * @brief 轮速反解所需矩阵及估计结果发布接口
+     */
+    struct VelocityEstimator
+    {
+        Eigen::MatrixXd inverse;
+        rclcpp::Publisher<framework::msg::ChassisVelocity>::SharedPtr publisher;
+    };
+
+    VelocityEstimator velocity_estimator_ {};
     bool joint_states_seen_ {false};
     double forward_input_ {0.0};
     double strafe_input_ {0.0};
@@ -199,29 +213,6 @@ private:
     rclcpp::Subscription<framework::msg::KeyboardState>::SharedPtr      keyboard_sub_;
 
     rclcpp::TimerBase::SharedPtr timer_;
-
-    /**
-     * @brief 把值对称限幅到 ±|limit|
-     *
-     * @param v 输入值
-     * @param limit 限幅幅值
-     * @return double 限幅后的值
-     */
-    static double clamp_abs(double v, double limit)
-    {
-        return std::clamp(v, -std::abs(limit), std::abs(limit));
-    }
-
-    /**
-     * @brief 小写字母键在 key_down 数组里的下标
-     *
-     * @param key 小写字母键
-     * @return std::size_t 下标
-     */
-    static constexpr std::size_t key_index(char key)
-    {
-        return static_cast<std::size_t>(key - 'a');
-    }
 
     /**
      * @brief 从 ROS 参数读入上面几组参数
@@ -243,22 +234,21 @@ private:
         follow_params_.dead_zone       = declare_parameter("follow_dead_zone_deg",          0.5) * M_PI / 180.0;
         follow_params_.input_timeout_s = declare_parameter("follow_input_timeout_s",        0.2);
 
-        wheel_control_params_.kp       = declare_parameter("kp_wheel",                      0.5);
-        wheel_control_params_.radius   = declare_parameter("wheel_radius",                  0.04);
-        wheel_control_params_.torque_limit = declare_parameter("wheel_torque_limit",        0.3);
-
         joint_params_.big_yaw          = declare_parameter("big_yaw_joint",                 "big_yaw_joint");
         joint_params_.small_yaw        = declare_parameter("small_yaw_joint",               "small_yaw_joint");
 
+        topic_params_.velocity         = declare_parameter("velocity_topic",                "/chassis/velocity");
         topic_params_.joint_states     = declare_parameter("joint_states_topic",            "/joint_states");
         topic_params_.keyboard         = declare_parameter("keyboard_topic",                "/keyboard");
         topic_params_.motor_prefix     = declare_parameter("motor_topic_prefix",            "/motor");
 
+        wheel_control_params_.kp       = declare_parameter("kp_wheel",                      0.5);
+        wheel_control_params_.radius   = declare_parameter("wheel_radius",                  0.04);
+        wheel_control_params_.torque_limit = declare_parameter("wheel_torque_limit",        0.3);
+
         wheel_params_.names = declare_parameter("wheel_names", std::vector<std::string> {
-                                                 "front_left_wheel", 
-                                                 "front_right_wheel", 
-                                                 "rear_left_wheel", 
-                                                 "rear_right_wheel" });
+                                                "front_left_wheel",     "front_right_wheel",
+                                                "rear_left_wheel",      "rear_right_wheel" });
         wheel_params_.x = declare_parameter("wheel_x", std::vector<double>{0.08, 0.08, -0.08, -0.08});
         wheel_params_.y = declare_parameter("wheel_y", std::vector<double>{0.08, -0.08, 0.08, -0.08});
         wheel_params_.yaw_deg = declare_parameter("wheel_yaw_deg", std::vector<double>{135.0, 45.0, -135.0, -45.0});
@@ -290,14 +280,17 @@ private:
         {
             throw std::runtime_error("chassis: follow rate limit / input timeout must be positive and finite");
         }
+
         controller::Pid<double>::Params params;
-        params.kp = follow_params_.kp;
-        params.ki = follow_params_.ki;
-        params.kd = follow_params_.kd;
-        params.dt = timing_params_.control_period_s;
-        params.dead_zone = follow_params_.dead_zone;
-        params.output_limit = follow_params_.rate_limit;
+
+        params.kp             = follow_params_.kp;
+        params.ki             = follow_params_.ki;
+        params.kd             = follow_params_.kd;
+        params.dt             = timing_params_.control_period_s;
+        params.dead_zone      = follow_params_.dead_zone;
+        params.output_limit   = follow_params_.rate_limit;
         params.integral_limit = follow_params_.integral_limit;
+
         follow_pid_.configure(params);
     }
 
@@ -308,11 +301,11 @@ private:
      */
     double compute_yaw_rate_command(double barrel_angle)
     {
-        const bool input_fresh = std::chrono::duration<double>(std::chrono::steady_clock::now() - keyboard_time_).count() <= follow_params_.input_timeout_s;
-        const bool following   = follow_hold_ && input_fresh;
+        const bool   input_fresh    = std::chrono::duration<double>(std::chrono::steady_clock::now() - keyboard_time_).count() <= follow_params_.input_timeout_s;
+        const bool   following      = follow_hold_ && input_fresh;
 
         // 全向底盘四个轮间方向等价，选择最近的 90 度整数倍，避免绕远归零。
-        const double quarter_turn = M_PI / 2.0;
+        const double quarter_turn   = M_PI / 2.0;
         const double nearest_target = math::normalize_radian_pm_pi(std::round(barrel_angle / quarter_turn) * quarter_turn);
 
         if (following != follow_was_active_ || (following && nearest_target != follow_target_))
@@ -327,7 +320,7 @@ private:
             // alpha = yaw_gimbal - yaw_base，底盘正转会使 alpha 减小。
             // PID 使用 target - measurement，故反号后才是正确的底盘转向。
             const double wz = -follow_pid_.update_angle(barrel_angle, follow_target_);
-            RCLCPP_DEBUG_THROTTLE(get_logger(), *get_clock(), 100, "底盘跟随 angle_deg=%.3f target_deg=%.3f wz_rad_s=%.4f", barrel_angle * 180.0 / M_PI, follow_target_ * 180.0 / M_PI, wz);
+            RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 20, "底盘跟随 angle_deg=%.3f target_deg=%.3f wz_rad_s=%.4f", barrel_angle * 180.0 / M_PI, follow_target_ * 180.0 / M_PI, wz);
             return wz;
         }
         return input_fresh && spin_active_ ? spin_params_.yaw_rate : 0.0;
@@ -357,18 +350,90 @@ private:
     WheelState compute_wheel_state(std::size_t i) const
     {
         const double yaw = wheel_params_.yaw_deg[i] * M_PI / 180.0;
-        const double ax = -std::sin(yaw);  // Rz(yaw) * (0,1,0) = (-sin, cos, 0)
-        const double ay =  std::cos(yaw);
+        const double ax  = -std::sin(yaw);                                          // Rz(yaw) * (0,1,0) = (-sin, cos, 0)
+        const double ay  =  std::cos(yaw);
 
-        const double ux = ay;   // u = -(z_hat x a) = (ay, -ax)
-        const double uy = -ax;
+        const double ux  = ay;                                                         // u = -(z_hat x a) = (ay, -ax)
+        const double uy  = -ax;
         const double norm = std::hypot(ux, uy);
 
         WheelState wheel;
         wheel.ux = ux / norm;
         wheel.uy = uy / norm;
-        wheel.m = wheel.ux * (-wheel_params_.y[i]) + wheel.uy * wheel_params_.x[i];  // u dot (z_hat x r)
+        wheel.m  = wheel.ux * (-wheel_params_.y[i]) + wheel.uy * wheel_params_.x[i];    // u dot (z_hat x r)
+
         return wheel;
+    }
+
+    /**
+     * @brief 建立轮速到机体速度的最小二乘逆映射，与轮速目标分配共用几何
+     */
+    void configure_velocity_estimator()
+    {
+        Eigen::MatrixXd  mapping(wheels_.size(), 3);
+        for (std::size_t i = 0; i < wheels_.size(); ++i)
+        {
+            mapping.row(i) << wheels_[i].ux, wheels_[i].uy, wheels_[i].m;
+        }
+        Eigen::ColPivHouseholderQR<Eigen::MatrixXd> solver(mapping);
+        if (solver.rank() != 3)
+        {
+            throw std::runtime_error("chassis: wheel geometry cannot resolve vx/vy/wz");
+        }
+        velocity_estimator_.inverse = solver.solve(Eigen::MatrixXd::Identity(wheels_.size(), wheels_.size()));
+    }
+
+    /**
+     * @brief 同一帧全部轮速齐全时发布底盘系速度估计，沿用反馈时间戳
+     */
+    void publish_measured_velocity(const sensor_msgs::msg::JointState& msg)
+    {
+        Eigen::VectorXd    speeds(wheels_.size());
+        std::vector<bool>  found( wheels_.size(), false);
+
+        for (std::size_t i = 0; i < msg.name.size() && i < msg.velocity.size(); ++i)
+        {
+            for (std::size_t j = 0; j < wheels_.size(); ++j)
+            {
+                if (msg.name[i] == wheel_params_.names[j] + "_joint" && std::isfinite(msg.velocity[i])) {
+                    speeds(j) = wheel_control_params_.radius * msg.velocity[i];
+                    found[j] = true;
+                }
+            }
+        }
+
+        if (!std::all_of(found.begin(), found.end(), [](bool value) { return value; })) {
+            return;
+        }
+
+        const Eigen::Vector3d velocity = velocity_estimator_.inverse * speeds;
+        if (!velocity.allFinite()) {
+            return;
+        }
+
+        framework::msg::ChassisVelocity output;
+
+        output.vx_m_s   = velocity.x();
+        output.vy_m_s   = velocity.y();
+        output.wz_rad_s = velocity.z();
+
+        output.header   = msg.header;
+        output.header.frame_id = "base_link";
+
+        velocity_estimator_.publisher->publish(output);
+
+        double residual_squared = 0.0;
+        for (std::size_t i = 0; i < wheels_.size(); ++i)
+        {
+            const double residual = speeds(i) - wheels_[i].ux * velocity.x()
+                - wheels_[i].uy * velocity.y() - wheels_[i].m * velocity.z();
+            residual_squared += residual * residual;
+        }
+        RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 20,
+            "底盘测速 t=%.6f vx=%.5f vy=%.5f wz=%.5f wheel_speed_norm=%.5f residual_norm=%.5f spin=%d follow=%d",
+            static_cast<double>(msg.header.stamp.sec) + msg.header.stamp.nanosec * 1e-9,
+            velocity.x(), velocity.y(), velocity.z(), speeds.norm(), std::sqrt(residual_squared),
+            spin_active_ ? 1 : 0, follow_hold_ ? 1 : 0);
     }
 
     /**
@@ -376,6 +441,8 @@ private:
      */
     void setup_ros_interfaces()
     {
+        velocity_estimator_.publisher = create_publisher<framework::msg::ChassisVelocity>(topic_params_.velocity, rclcpp::SensorDataQoS());
+
         joint_states_sub_ = create_subscription<sensor_msgs::msg::JointState>(
             topic_params_.joint_states, rclcpp::SensorDataQoS(),
             [this](const sensor_msgs::msg::JointState::SharedPtr msg) { on_joint_states(msg); });
@@ -405,12 +472,8 @@ private:
      */
     void on_keyboard(const framework::msg::KeyboardState::SharedPtr& msg)
     {
-        const auto is_down = [msg](char key) {
-            return msg->key_down[key_index(key)];
-        };
-
-        forward_input_ = (is_down('w') ? 1.0 : 0.0) - (is_down('s') ? 1.0 : 0.0);
-        strafe_input_  = (is_down('a') ? 1.0 : 0.0) - (is_down('d') ? 1.0 : 0.0);
+        forward_input_ = (msg->key_down['w' - 'a'] ? 1.0 : 0.0) - (msg->key_down['s' - 'a'] ? 1.0 : 0.0);
+        strafe_input_  = (msg->key_down['a' - 'a'] ? 1.0 : 0.0) - (msg->key_down['d' - 'a'] ? 1.0 : 0.0);
         spin_active_   = msg->spin_active || msg->shift_hold;
         follow_hold_   = msg->ctrl_hold;
         keyboard_time_ = std::chrono::steady_clock::now();
@@ -423,24 +486,27 @@ private:
      */
     void on_joint_states(const sensor_msgs::msg::JointState::SharedPtr& msg)
     {
+        publish_measured_velocity(*msg);
+
         bool saw_any_wheel = false;
         bool saw_big       = false;
         bool saw_small     = false;
 
         for (std::size_t i = 0; i < msg->name.size(); ++i)
         {
-            if (msg->name[i] == joint_params_.big_yaw)
-            {
+            if (i >= msg->position.size() || i >= msg->velocity.size()) {
+                continue;
+            }
+
+            if (msg->name[i] == joint_params_.big_yaw) {
                 gimbal_.q_big = msg->position[i];
                 saw_big = true;
             }
-            else if (msg->name[i] == joint_params_.small_yaw)
-            {
+            else if (msg->name[i] == joint_params_.small_yaw) {
                 gimbal_.q_small = msg->position[i];
                 saw_small = true;
             }
-            else
-            {
+            else {
                 saw_any_wheel = update_wheel_speed_from_joint(msg->name[i], msg->velocity[i]) || saw_any_wheel;
             }
         }
@@ -473,14 +539,13 @@ private:
      */
     void control_tick()
     {
-        if (!joint_states_seen_)
-        {
+        if (!joint_states_seen_) {
             return;
         }
 
         // 目标速度：键盘输入先在枪管系，再按枪管相对底盘的偏角 q_big + q_small 旋到底盘系
         VelocityCommand velocity;
-        velocity.barrel_angle = math::normalize_radian_pm_pi(gimbal_.q_big + gimbal_.q_small);
+        velocity.barrel_angle   = math::normalize_radian_pm_pi(gimbal_.q_big + gimbal_.q_small);
 
         const double  vx_barrel = forward_input_ * drive_input_params_.forward_speed;
         const double  vy_barrel = strafe_input_ * drive_input_params_.strafe_speed;
@@ -500,7 +565,7 @@ private:
         }
 
         std_msgs::msg::Float64 msg;
-        const std::size_t n_pub = std::min(wheel_cmds.size(), wheel_pubs_.size());
+        const auto n_pub = std::min(wheel_cmds.size(), wheel_pubs_.size());
         for (std::size_t i = 0; i < n_pub; ++i)
         {
             msg.data = wheel_cmds[i].tau;

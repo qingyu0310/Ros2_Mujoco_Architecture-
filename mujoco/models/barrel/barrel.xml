@@ -19,30 +19,28 @@
 
   <default>
     <!-- 枪管管体：一个真正的中空圆柱 mesh，不再用杆子围出通道。
-         mesh 碰撞在 MuJoCo 中会按凸包处理；这里先作为外观和惯量模型，发射机构接触后续单独建。 -->
+         mesh 碰撞在 MuJoCo 中会按凸包处理；这里作为外观和惯量模型，碰撞用下方独立内壁代理。 -->
     <default class="barrel_tube_geom">
       <geom type="mesh" mesh="barrel_tube_mesh" mass="0.04" rgba="0.36 0.39 0.43 1" contype="0" conaffinity="0"/>
     </default>
 
-    <!-- 摩擦轮关节：圆柱轴线和关节轴都沿局部 Z，后续可直接加 motor 驱动。 -->
+    <!-- 摩擦轮关节：圆柱轴线和关节轴都沿局部 Z，无角度限位。
+         与底盘 M3508 P19 配置一致：转子与减速箱折算惯量约 0.001 kg·m²。
+         电机力矩由整机 actuator 驱动，左右轮反向旋转以沿 +X 送弹。 -->
     <default class="friction_wheel_joint">
-      <joint type="hinge" axis="0 0 1" damping="0.0002" armature="0.00001"/>
+      <joint type="hinge" axis="0 0 1" limited="false" damping="0.001" armature="0.001"/>
     </default>
 
     <!-- 摩擦轮：直径 26 mm，厚 8 mm。
          两轮中心距枪管轴 20.5 mm，内侧轮面到轴线约 7.5 mm；
          弹丸半径 8.4 mm，因此每侧约 0.9 mm 预压，用软接触模拟橡胶弹性。 -->
+    <!-- 0.1 ms 物理步长下的接触时间常数 0.2 ms，用于高速夹弹接触。 -->
     <default class="friction_wheel_geom">
       <geom type="cylinder" size="0.013 0.004" mass="0.006" rgba="1.00 0.34 0.06 1"
-            friction="2.0 0.04 0.002" solref="0.010 1" solimp="0.80 0.95 0.002"
+            friction="2.0 0.04 0.002" solref="0.0002 1" solimp="0.80 0.95 0.002"
             contype="1" conaffinity="1"/>
     </default>
 
-    <!-- 17 mm 弹丸外观参考：黄绿色球，直径 16.8 mm，质量 3.2 g。
-         当前是非接触 marker，后续发射时再生成真实自由体弹丸。 -->
-    <default class="projectile_17mm_marker">
-      <geom type="sphere" size="0.0084" mass="0.0032" rgba="0.72 0.95 0.12 1" contype="0" conaffinity="0"/>
-    </default>
   </default>
 
   <worldbody>
@@ -61,8 +59,13 @@
         <geom name="friction_wheel_r" class="friction_wheel_geom"/>
       </body>
 
-      <!-- 弹丸外观参考放在枪管入口附近。 -->
-      <geom name="projectile_17mm_preview" class="projectile_17mm_marker" pos="0.015 0 0"/>
+      <!-- 非接触装填位置标记，无质量；实际弹丸在 worldbody 下独立自由运动。 -->
+      <site name="projectile_feed" pos="0.050 0 0" size="0.002" rgba="0.72 0.95 0.12 1"/>
+      <!-- 单独的无质量内壁碰撞代理，净通道 17 mm；左右壁避开摩擦轮入口。 -->
+      <geom name="bore_top" type="box" pos="0.0635 0 0.01125" size="0.0455 0.0085 0.00275" mass="0" rgba="0.36 0.39 0.43 0"/>
+      <geom name="bore_bottom" type="box" pos="0.0635 0 -0.01125" size="0.0455 0.0085 0.00275" mass="0" rgba="0.36 0.39 0.43 0"/>
+      <geom name="bore_left" type="box" pos="0.089 0.01125 0" size="0.020 0.00275 0.014" mass="0" rgba="0.36 0.39 0.43 0"/>
+      <geom name="bore_right" type="box" pos="0.089 -0.01125 0" size="0.020 0.00275 0.014" mass="0" rgba="0.36 0.39 0.43 0"/>
     </body>
   </worldbody>
 </mujoco>

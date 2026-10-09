@@ -7,6 +7,7 @@ find_package(Eigen3 REQUIRED)
 # ROS"在这条上让位）。rosidl 判"接口类别"用的是文件紧邻那层目录的名字（见 rosidl_generate_interfaces.cmake），
 # 这里紧邻的是 msg，所以身份仍是标准的 framework/msg/KeyboardState
 find_package(rosidl_default_generators REQUIRED)
+find_package(std_msgs REQUIRED)
 
 # 纯模板头，没有 .cpp，所以做成 INTERFACE 库：本包不产二进制，只导出 include 路径和 Eigen。
 # 这里刻意不叫 ${PROJECT_NAME}：rosidl 生成的 .so 是按"目标名"命名的，而运行时按
@@ -35,10 +36,12 @@ install(EXPORT ${PROJECT_NAME}_targets
     NAMESPACE ${PROJECT_NAME}::
     DESTINATION share/${PROJECT_NAME}/cmake)
 
-# 键盘状态消息。目标名必须是包名：生成的 .so 就叫 libframework__rosidl_typesupport_*.so，
+# 键盘状态与底盘速度消息。目标名必须是包名：生成的 .so 就叫 libframework__rosidl_typesupport_*.so，
 # 跟运行时按包名去找的名字一致（上面 INTERFACE 库因此改了名）
 rosidl_generate_interfaces(${PROJECT_NAME}
-    "modules/msg/KeyboardState.msg")
+    "modules/msg/KeyboardState.msg"
+    "modules/msg/ChassisVelocity.msg"
+    DEPENDENCIES std_msgs)
 
 # 把消息的类型支持挂到 INTERFACE 库上：消费方链 framework::framework 就同时拿到消息的头和序列化
 rosidl_get_typesupport_target(cpp_typesupport_target ${PROJECT_NAME} "rosidl_typesupport_cpp")
@@ -50,6 +53,6 @@ target_link_libraries(framework_lib INTERFACE ${cpp_typesupport_target})
 # 否则消费方 find_package(framework) 会直接失败：referenced, but are missing
 ament_export_include_directories(include)
 ament_export_targets(${PROJECT_NAME}_targets)
-ament_export_dependencies(Eigen3)
+ament_export_dependencies(Eigen3 std_msgs rosidl_default_runtime)
 
 ament_package()

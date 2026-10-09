@@ -57,10 +57,11 @@
            传感器（gimbal_imu_quat/gyro/accel）在整机 XML 里按全名引用。 -->
       <site name="gimbal_imu_site" pos="0 0 0" size="0.003" rgba="1.00 0.20 0.60 1"/>
 
-      <!-- 第一人称摄像头：放在 pitch 轴附近，随 pitch/yaw 一起动，朝局部 +X（枪管方向）看。
+      <!-- 第一人称摄像头：放在枪口前上方（枪口 x=0.109 m），避开枪管及车体遮挡。
+           随 pitch/yaw 一起动，朝局部 +X（枪管方向）看。
            MuJoCo camera 默认沿局部 -Z 看；xyaxes 让 camera -Z 对齐 pitch 局部 +X。 -->
-      <camera name="camera" pos="0.030 0 0.018" xyaxes="0 -1 0 0 0 1" fovy="70"/>
-      <site name="camera_marker" class="pitch_camera_marker" pos="0.030 0 0.018"/>
+      <camera name="camera" pos="0.120 0 0.040" xyaxes="0 -1 0 0 0 1" fovy="70"/>
+      <site name="camera_marker" class="pitch_camera_marker" pos="0.120 0 0.040"/>
 
       <!-- 独立枪管模型挂在 pitch 子体下，随 pitch_joint 俯仰。 -->
       <attach model="barrel_unit" body="barrel_link" prefix="barrel_"/>

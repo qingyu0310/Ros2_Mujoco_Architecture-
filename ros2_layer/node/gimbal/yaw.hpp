@@ -9,7 +9,7 @@
  *
  * @note 小轴闭环世界角，大轴只做随动参考：世界角误差先给大轴定目标，超出软限位的部分
  *       才转给大轴参考，限位内保持大轴参考不动。底盘朝向由 IMU 世界角和两轴编码器推算，
- *       不额外引入底盘 IMU 或速度反馈。
+ *       不额外引入底盘 IMU，角速度订阅底盘轮速运动学估计。
  */
 
 #pragma once
@@ -26,6 +26,7 @@
 
 #include <Eigen/Dense>
 #include <geometry_msgs/msg/vector3_stamped.hpp>
+#include "framework/msg/chassis_velocity.hpp"
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/joint_state.hpp>
 #include <std_msgs/msg/float64.hpp>
@@ -49,15 +50,18 @@ public:
         configure_lqr();
         setup_ros_interfaces();
 
-        timer_ = create_wall_timer(std::chrono::duration<double>(control_params_.control_period_s), std::bind(&YawNode::control_tick, this));
+        ros_.timer = create_wall_timer(std::chrono::duration<double>(control_params_.control_period_s), std::bind(&YawNode::control_tick, this));
 
-        RCLCPP_INFO(get_logger(), "云台就绪：小 yaw IMU 世界角闭环，大 yaw 仅在小轴目标越过软限位时随动");
+        RCLCPP_INFO(get_logger(), "云台就绪：小 yaw 世界角闭环，大 yaw 软限随动，固定基座惯性前馈%s，参考导数低通 %.1f Hz",
+            inertia_params_.enable ? "开启" : "关闭", inertia_params_.reference_lpf_hz);
     }
 
 private:
+    using YawLqr = algorithm::controller::Lqr<2, 1>;
+
     static constexpr double kDegToRad = M_PI / 180.0;
     static constexpr double kRadToDeg = 180.0 / M_PI;
-    using YawLqr = algorithm::controller::Lqr<2, 1>;
+
     static constexpr double kYawJointDamping = 0.002;
 
     /**
@@ -65,8 +69,8 @@ private:
      */
     struct ModelParams
     {
-        double j_big    {0.0025};
-        double j_small  {0.0005};
+        double j_big          {0.0025};
+        double j_small        {0.0005};
         double armature_big   {0.0018};
         double armature_small {0.0018};
     };
@@ -76,10 +80,83 @@ private:
      */
     struct ControlParams
     {
-        double control_period_s {0.001};
+        double control_period_s     {0.001};
         std::array<double, 2> q_pos {1000.0, 20.0};
-        std::array<double, 2> q_vel {1.0, 1.0};
-        std::array<double, 2> r     {1.0, 1.0};
+        std::array<double, 2> q_vel {1.0,    1.0};
+        std::array<double, 2> r     {1.0,    1.0};
+    };
+
+    /**
+     * @brief 固定基座参考逆动力学前馈，不改变大小轴目标分配
+     */
+    struct InertiaParams
+    {
+        bool enable {true};
+        double reference_lpf_hz {15.0};
+    };
+
+    /**
+     * @brief 底盘角速度补偿配置，与惯性前馈配置分开管理
+     */
+    struct BaseRateParams
+    {
+        bool enable {true};
+        double timeout_s {0.1};
+    };
+
+    /**
+     * @brief 底盘话题采样，时间戳和接收时间随测量值一起管理
+     */
+    struct BaseRateSample
+    {
+        double rate {0.0};
+        std::int64_t stamp_ns {0};
+        bool valid {false};
+        std::chrono::steady_clock::time_point received {};
+    };
+
+    /**
+     * @brief 键盘输入状态和底盘模式请求
+     */
+    struct InputState
+    {
+        double command {0.0};
+        bool spin_requested {false};
+        bool follow_requested {false};
+    };
+
+    /**
+     * @brief 世界目标与历史大轴分配参考
+     */
+    struct ReferenceState
+    {
+        double world {0.0};
+        double big {0.0};
+        double big_rate {0.0};
+        double rate_reference {0.0};
+        std::int64_t rate_stamp_ns {0};
+        bool rate_initialized {false};
+        bool target_initialized {false};
+        bool big_initialized {false};
+    };
+
+    /**
+     * @brief 分配参考的滤波速度、加速度和各项前馈力矩
+     */
+    struct InertiaState
+    {
+        bool   initialized        {false};
+
+        double big_rate           {0.0};
+        double small_rate         {0.0};
+        double big_accel          {0.0};
+        double small_accel        {0.0};
+        double big_self           {0.0};
+        double big_cross          {0.0};
+        double small_self         {0.0};
+        double small_cross        {0.0};
+        double big_damping        {0.0};
+        double small_damping      {0.0};
     };
 
     /**
@@ -88,7 +165,7 @@ private:
     struct InputParams
     {
         double mouse_yaw_sensitivity {-1.0};
-        double target_rate_limit {M_PI};
+        double target_rate_limit     {M_PI};
     };
 
     /**
@@ -97,7 +174,7 @@ private:
     struct LimitParams
     {
         double small_soft_limit {M_PI / 3.0};
-        double big_ctrl_limit {7.0};
+        double big_ctrl_limit   {7.0};
         double small_ctrl_limit {7.0};
     };
 
@@ -106,7 +183,7 @@ private:
      */
     struct JointParams
     {
-        std::string big_yaw_joint {"big_yaw_joint"};
+        std::string big_yaw_joint   {"big_yaw_joint"};
         std::string small_yaw_joint {"small_yaw_joint"};
     };
 
@@ -115,11 +192,12 @@ private:
      */
     struct TopicParams
     {
-        std::string keyboard_topic {"/keyboard"};
+        std::string keyboard_topic     {"/keyboard"};
         std::string joint_states_topic {"/joint_states"};
         std::string motor_topic_prefix {"/motor"};
-        std::string yaw_angle_topic {"/gimbal/imu/euler_rad"};
-        std::string yaw_rate_topic {"/gimbal/imu/angular_velocity"};
+        std::string yaw_angle_topic    {"/gimbal/imu/euler_rad"};
+        std::string yaw_rate_topic     {"/gimbal/imu/angular_velocity"};
+        std::string base_velocity_topic {"/chassis/velocity"};
     };
 
     /**
@@ -131,7 +209,8 @@ private:
         double dq_big {0.0};
         double q_small {0.0};
         double dq_small {0.0};
-        bool valid {false};
+        std::int64_t stamp_ns {0};
+        bool   valid {false};
     };
 
     /**
@@ -139,6 +218,9 @@ private:
      */
     struct ImuSample
     {
+        Eigen::Vector3d rpy {Eigen::Vector3d::Zero()};
+        Eigen::Vector3d gyro {Eigen::Vector3d::Zero()};
+        std::int64_t rate_stamp_ns {0};
         double yaw_world {0.0};
         double yaw_rate_world {0.0};
         std::int64_t stamp_ns {0};
@@ -155,36 +237,57 @@ private:
         double small {0.0};
     };
 
-    
-    YawLqr          big_joint_lqr_   {};
-    YawLqr          small_world_lqr_ {};
+    /**
+     * @brief 底盘话题提供的平面角速度与编码器推算的基座航向
+     */
+    struct BaseYawSample
+    {
+        double yaw {0.0};
+        double heading_rate {0.0};
+        double axis_rate {0.0};
+        bool valid {false};
+    };
 
-    ImuSample       imu_    {};
-    JointSample     joints_ {};
+    BaseYawSample base_yaw_ {};
+    BaseRateSample base_rate_ {};
+    BaseRateParams base_rate_params_ {};
+    InputState input_ {};
+    ReferenceState reference_ {};
 
-    ModelParams     model_params_   {};
-    InputParams     input_params_   {};
-    LimitParams     limit_params_   {};
-    JointParams     joint_params_   {};
-    TopicParams     topic_params_   {};
-    ControlParams   control_params_ {};
-    
-    double theta_des_world_ {0.0};
-    double keyboard_input_  {0.0};
-    double big_reference_radian_ {0.0};
+    YawLqr big_joint_lqr_   {};
+    YawLqr small_world_lqr_ {};
 
-    bool   target_initialized_ {false};
-    bool   big_reference_initialized_ {false};
+    InertiaState  inertia_  {};
+    InertiaParams inertia_params_ {};
 
-    rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr       joint_states_sub_;
-    rclcpp::Subscription<framework::msg::KeyboardState>::SharedPtr      keyboard_sub_;
-    rclcpp::Subscription<geometry_msgs::msg::Vector3Stamped>::SharedPtr yaw_angle_sub_;
-    rclcpp::Subscription<geometry_msgs::msg::Vector3Stamped>::SharedPtr yaw_rate_sub_;
+    ImuSample     imu_      {};
+    JointSample   joints_   {};
 
-    rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr big_yaw_cmd_pub_;
-    rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr small_yaw_cmd_pub_;
+    ModelParams   model_params_   {};
+    InputParams   input_params_   {};
+    LimitParams   limit_params_   {};
+    JointParams   joint_params_   {};
+    TopicParams   topic_params_   {};
+    ControlParams control_params_ {};
 
-    rclcpp::TimerBase::SharedPtr timer_;
+    /**
+     * @brief 节点订阅、发布和控制定时器
+     */
+    struct RosInterfaces
+    {
+        rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr       joint_states_sub;
+        rclcpp::Subscription<framework::msg::KeyboardState>::SharedPtr      keyboard_sub;
+        rclcpp::Subscription<geometry_msgs::msg::Vector3Stamped>::SharedPtr yaw_angle_sub;
+        rclcpp::Subscription<geometry_msgs::msg::Vector3Stamped>::SharedPtr yaw_rate_sub;
+
+        rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr big_yaw_cmd_pub;
+        rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr small_yaw_cmd_pub;
+
+        rclcpp::Subscription<framework::msg::ChassisVelocity>::SharedPtr base_velocity_sub;
+        rclcpp::TimerBase::SharedPtr timer;
+    };
+
+    RosInterfaces ros_ {};
 
     /**
      * @brief 读 2 元数组参数，长度不是 2 直接抛错
@@ -217,9 +320,14 @@ private:
         input_params_.target_rate_limit     = declare_parameter("target_rate_limit_deg",    180.0) * kDegToRad;
         input_params_.mouse_yaw_sensitivity = declare_parameter("mouse_yaw_sensitivity",    -1.0);
 
-        limit_params_.small_soft_limit      = declare_parameter("small_yaw_soft_limit_deg", 60.0) * kDegToRad;
+        limit_params_.small_soft_limit      = declare_parameter("small_yaw_soft_limit_deg", 60.0)  * kDegToRad;
         limit_params_.big_ctrl_limit        = declare_parameter("big_yaw_ctrl_limit",       7.0);
         limit_params_.small_ctrl_limit      = declare_parameter("small_yaw_ctrl_limit",     7.0);
+
+        base_rate_params_.timeout_s = declare_parameter("yaw_base_rate_timeout_s", 0.1);
+        base_rate_params_.enable = declare_parameter("yaw_base_rate_comp_enable", true);
+        inertia_params_.enable              = declare_parameter("yaw_inertia_ff_enable",    true);
+        inertia_params_.reference_lpf_hz    = declare_parameter("yaw_inertia_reference_lpf_hz", 15.0);
 
         model_params_.j_big                 = declare_parameter("j_big",                    0.0025);
         model_params_.j_small               = declare_parameter("j_small",                  0.0005);
@@ -229,6 +337,7 @@ private:
         joint_params_.big_yaw_joint         = declare_parameter("big_yaw_joint",            "big_yaw_joint");
         joint_params_.small_yaw_joint       = declare_parameter("small_yaw_joint",          "small_yaw_joint");
 
+        topic_params_.base_velocity_topic = declare_parameter("base_velocity_topic", "/chassis/velocity");
         topic_params_.keyboard_topic        = declare_parameter("keyboard_topic",           "/keyboard");
         topic_params_.joint_states_topic    = declare_parameter("joint_states_topic",       "/joint_states");
         topic_params_.motor_topic_prefix    = declare_parameter("motor_topic_prefix",       "/motor");
@@ -241,9 +350,17 @@ private:
      */
     void configure_lqr()
     {
+        if (!(base_rate_params_.timeout_s > 0.0) || !std::isfinite(base_rate_params_.timeout_s))
+        {
+            throw std::runtime_error("yaw_base_rate_timeout_s must be positive and finite");
+        }
+        if (!(inertia_params_.reference_lpf_hz > 0.0) || !std::isfinite(inertia_params_.reference_lpf_hz))
+        {
+            throw std::runtime_error("yaw_inertia_reference_lpf_hz must be positive and finite");
+        }
         if (!(control_params_.control_period_s  >  0.0  && model_params_.j_big            >  0.0   && model_params_.j_small > 0.0 &&
               model_params_.armature_big        >= 0.0  && model_params_.armature_small   >= 0.0   &&
-              limit_params_.small_soft_limit    >  0.0  && limit_params_.small_soft_limit <  120.0 * kDegToRad &&
+              limit_params_.small_soft_limit    >  0.0  && limit_params_.small_soft_limit <  360.0 * kDegToRad &&
               input_params_.target_rate_limit   >  0.0  &&
               limit_params_.big_ctrl_limit      >  0.0  && limit_params_.small_ctrl_limit >  0.0))
         {
@@ -285,24 +402,28 @@ private:
      */
     void setup_ros_interfaces()
     {
-        joint_states_sub_ = create_subscription<sensor_msgs::msg::JointState>(
+        ros_.base_velocity_sub = create_subscription<framework::msg::ChassisVelocity>(
+            topic_params_.base_velocity_topic, rclcpp::SensorDataQoS(),
+            [this](const framework::msg::ChassisVelocity::SharedPtr msg)  { on_base_velocity(msg); });
+
+        ros_.joint_states_sub = create_subscription<sensor_msgs::msg::JointState>(
             topic_params_.joint_states_topic, rclcpp::SensorDataQoS(),
-            [this](const sensor_msgs::msg::JointState::SharedPtr msg)        { on_joint_states(msg); });
+            [this](const sensor_msgs::msg::JointState::SharedPtr msg)       { on_joint_states(msg); });
 
-        keyboard_sub_ = create_subscription<framework::msg::KeyboardState>(
+        ros_.keyboard_sub = create_subscription<framework::msg::KeyboardState>(
             topic_params_.keyboard_topic, 10,
-            [this](const framework::msg::KeyboardState::SharedPtr msg)       { on_keyboard(msg); });
+            [this](const framework::msg::KeyboardState::SharedPtr msg)      { on_keyboard(msg); });
 
-        yaw_angle_sub_ = create_subscription<geometry_msgs::msg::Vector3Stamped>(
+        ros_.yaw_angle_sub = create_subscription<geometry_msgs::msg::Vector3Stamped>(
             topic_params_.yaw_angle_topic, rclcpp::SensorDataQoS(),
-            [this](const geometry_msgs::msg::Vector3Stamped::SharedPtr msg)  { on_yaw_angle(msg); });
+            [this](const geometry_msgs::msg::Vector3Stamped::SharedPtr msg) { on_yaw_angle(msg); });
 
-        yaw_rate_sub_ = create_subscription<geometry_msgs::msg::Vector3Stamped>(
+        ros_.yaw_rate_sub = create_subscription<geometry_msgs::msg::Vector3Stamped>(
             topic_params_.yaw_rate_topic, rclcpp::SensorDataQoS(),
-            [this](const geometry_msgs::msg::Vector3Stamped::SharedPtr msg)  { imu_.yaw_rate_world = msg->vector.z; imu_.rate_valid = true; });
+            [this](const geometry_msgs::msg::Vector3Stamped::SharedPtr msg) { on_yaw_rate(msg); });
 
-        big_yaw_cmd_pub_   = create_publisher<std_msgs::msg::Float64>(topic_params_.motor_topic_prefix + "/big_yaw/cmd_force",   10);
-        small_yaw_cmd_pub_ = create_publisher<std_msgs::msg::Float64>(topic_params_.motor_topic_prefix + "/small_yaw/cmd_force", 10);
+        ros_.big_yaw_cmd_pub   = create_publisher<std_msgs::msg::Float64>(topic_params_.motor_topic_prefix + "/big_yaw/cmd_force",   10);
+        ros_.small_yaw_cmd_pub = create_publisher<std_msgs::msg::Float64>(topic_params_.motor_topic_prefix + "/small_yaw/cmd_force", 10);
     }
 
     /**
@@ -312,8 +433,10 @@ private:
      */
     void on_keyboard(const framework::msg::KeyboardState::SharedPtr& msg)
     {
+        input_.spin_requested    = msg->shift_hold || msg->spin_active;
+        input_.follow_requested  = msg->ctrl_hold;
         const double arrow_input = (msg->right ? 1.0 : 0.0) - (msg->left ? 1.0 : 0.0);
-        keyboard_input_ = std::clamp(msg->mouse_dx * input_params_.mouse_yaw_sensitivity + arrow_input, -1.0, 1.0);
+        input_.command = std::clamp(msg->mouse_dx * input_params_.mouse_yaw_sensitivity + arrow_input, -1.0, 1.0);
     }
 
     /**
@@ -324,19 +447,24 @@ private:
     void on_yaw_angle(const geometry_msgs::msg::Vector3Stamped::SharedPtr& msg)
     {
         const std::int64_t stamp_ns = static_cast<std::int64_t>(msg->header.stamp.sec) * 1000000000LL + static_cast<std::int64_t>(msg->header.stamp.nanosec);
-        if (imu_.angle_valid && stamp_ns <= imu_.stamp_ns)
-        {
+        if (imu_.angle_valid && stamp_ns <= imu_.stamp_ns) {
+            return;
+        }
+
+        imu_.rpy = Eigen::Vector3d(msg->vector.x, msg->vector.y, msg->vector.z);
+        if (!imu_.rpy.allFinite()) {
+            imu_.angle_valid = false;
             return;
         }
         imu_.yaw_world = normalize_radian_pm_pi(msg->vector.z);
         imu_.stamp_ns = stamp_ns;
         imu_.angle_valid = true;
 
-        if (!target_initialized_)
+        if (!reference_.target_initialized)
         {
-            theta_des_world_ = imu_.yaw_world;
-            target_initialized_ = true;
-            RCLCPP_INFO(get_logger(), "世界 yaw 目标初始化到 IMU 当前角度：%.1f deg", theta_des_world_ * kRadToDeg);
+            reference_.world = imu_.yaw_world;
+            reference_.target_initialized = true;
+            RCLCPP_INFO(get_logger(), "世界 yaw 目标初始化到 IMU 当前角度：%.1f deg", reference_.world * kRadToDeg);
         }
     }
 
@@ -347,30 +475,142 @@ private:
      */
     void on_joint_states(const sensor_msgs::msg::JointState::SharedPtr& msg)
     {
-        JointSample sample = joints_;
-        bool got_big = false;
-        bool got_small = false;
+        JointSample sample    = joints_;
+        sample.stamp_ns = static_cast<std::int64_t>(msg->header.stamp.sec) * 1000000000LL + msg->header.stamp.nanosec;
+        bool        got_big   = false;
+        bool        got_small = false;
+
         for (std::size_t i = 0; i < msg->name.size(); ++i)
         {
-            if (i >= msg->position.size() || i >= msg->velocity.size())
-            {
+            if (i >= msg->position.size() || i >= msg->velocity.size()) {
                 continue;
             }
-            if (msg->name[i] == joint_params_.big_yaw_joint)
-            {
+
+            if (msg->name[i] == joint_params_.big_yaw_joint) {
                 sample.q_big = msg->position[i];
                 sample.dq_big = msg->velocity[i];
                 got_big = true;
             }
-            else if (msg->name[i] == joint_params_.small_yaw_joint)
-            {
+            else if (msg->name[i] == joint_params_.small_yaw_joint) {
                 sample.q_small = msg->position[i];
                 sample.dq_small = msg->velocity[i];
                 got_small = true;
             }
         }
-        sample.valid = got_big && got_small;
+        sample.valid = got_big && got_small && std::isfinite(sample.q_big) && std::isfinite(sample.dq_big) &&
+                       std::isfinite(sample.q_small) && std::isfinite(sample.dq_small);
         joints_ = sample;
+    }
+
+    /**
+     * @brief 保存传感器局部角速度；坐标转换与关节反解在控制前统一完成
+     */
+    void on_yaw_rate(const geometry_msgs::msg::Vector3Stamped::SharedPtr& msg)
+    {
+        const std::int64_t stamp = static_cast<std::int64_t>(msg->header.stamp.sec) * 1000000000LL + msg->header.stamp.nanosec;
+        if (imu_.rate_valid && stamp <= imu_.rate_stamp_ns)
+        {
+            return;
+        }
+        imu_.gyro = Eigen::Vector3d(msg->vector.x, msg->vector.y, msg->vector.z);
+        imu_.rate_stamp_ns = stamp;
+        imu_.rate_valid = imu_.gyro.allFinite();
+    }
+
+    /**
+     * @brief 航向角速度由前向向量求导，避免将世界 omega.z 当欧拉 yaw 导数
+     */
+    static bool heading_rate(const Eigen::Matrix3d& rotation, const Eigen::Vector3d& omega, double& rate)
+    {
+        const Eigen::Vector3d forward = rotation.col(0);
+        const double horizontal_squared = forward.x() * forward.x() + forward.y() * forward.y();
+        if (horizontal_squared < 1e-8)
+        {
+            return false;
+        }
+        const Eigen::Vector3d derivative = omega.cross(forward);
+        rate = (forward.x() * derivative.y() - forward.y() * derivative.x()) / horizontal_squared;
+        return std::isfinite(rate);
+    }
+
+    /**
+     * @brief 接收底盘系实测轮速反解值，不接收目标自转指令作为反馈
+     */
+    void on_base_velocity(const framework::msg::ChassisVelocity::SharedPtr& msg)
+    {
+        const std::int64_t stamp = static_cast<std::int64_t>(msg->header.stamp.sec) * 1000000000LL + msg->header.stamp.nanosec;
+        if (!std::isfinite(msg->wz_rad_s) || msg->header.frame_id != "base_link" || (base_rate_.valid && stamp <= base_rate_.stamp_ns))
+        {
+            return;
+        }
+        base_rate_.rate     = msg->wz_rad_s;
+        base_rate_.stamp_ns = stamp;
+        base_rate_.received = std::chrono::steady_clock::now();
+        base_rate_.valid    = true;
+    }
+
+    /**
+     * @brief 修正云台航向速率，底盘速度主反馈来自 chassis 发布的平面运动学估计
+     * @note 底盘局部 z 速率用于平面 yaw 补偿；倾斜工况下不等同世界欧拉航向导数。
+     */
+    void update_base_kinematics()
+    {
+        base_yaw_ = BaseYawSample {};
+        const Eigen::Matrix3d world_barrel = (Eigen::AngleAxisd(imu_.rpy.z(), Eigen::Vector3d::UnitZ())
+                                           *  Eigen::AngleAxisd(imu_.rpy.y(), Eigen::Vector3d::UnitY())
+                                           *  Eigen::AngleAxisd(imu_.rpy.x(), Eigen::Vector3d::UnitX())).toRotationMatrix();
+
+        imu_.rate_valid = heading_rate(world_barrel, world_barrel * imu_.gyro, imu_.yaw_rate_world);
+
+        const double received_age = std::chrono::duration<double>(std::chrono::steady_clock::now() - base_rate_.received).count();
+        if (!base_rate_.valid || received_age > base_rate_params_.timeout_s || std::abs(imu_.stamp_ns - base_rate_.stamp_ns) * 1e-9 > base_rate_params_.timeout_s)
+        {
+            return;
+        }
+
+        base_yaw_.yaw          = normalize_radian_pm_pi(imu_.yaw_world - joints_.q_big - joints_.q_small);
+        base_yaw_.axis_rate    = base_rate_.rate;
+        base_yaw_.heading_rate = base_rate_.rate;
+        base_yaw_.valid        = true;
+    }
+
+    /**
+     * @brief 解析参考速度经低通后求加速度，不对含反馈测量的分配角二次差分
+     * @note Shift / Ctrl、基座运动或启用底盘补偿却没有有效速度时，退出固定基座前馈。
+     *       不修改参考角，不额外增加角度/速度限位。
+     */
+    bool update_inertia_feedforward(double big_rate_reference, double small_rate_reference)
+    {
+        const bool active = inertia_params_.enable && !input_.spin_requested && !input_.follow_requested &&
+                          (!base_rate_params_.enable || (base_yaw_.valid && std::abs(base_yaw_.heading_rate) <= 0.01));
+
+        if (!active || !inertia_.initialized)
+        {
+            inertia_ = InertiaState {};
+            inertia_.initialized = active;
+            return false;
+        }
+
+        const double dt             = control_params_.control_period_s;
+        const double alpha          = -std::expm1(-2.0 * M_PI * inertia_params_.reference_lpf_hz * dt);
+        const double raw_big_rate   = big_rate_reference;
+        const double raw_small_rate = small_rate_reference;
+        const double old_big_rate   = inertia_.big_rate;
+        const double old_small_rate = inertia_.small_rate;
+
+        inertia_.big_rate          += alpha * (raw_big_rate   - inertia_.big_rate);
+        inertia_.small_rate        += alpha * (raw_small_rate - inertia_.small_rate);
+        inertia_.big_accel          = (inertia_.big_rate      - old_big_rate)   / dt;
+        inertia_.small_accel        = (inertia_.small_rate    - old_small_rate) / dt;
+
+        inertia_.big_self           = (model_params_.j_big   + model_params_.j_small + model_params_.armature_big) * inertia_.big_accel;
+        inertia_.big_cross          =  model_params_.j_small * inertia_.small_accel;
+        inertia_.small_self         = (model_params_.j_small + model_params_.armature_small) * inertia_.small_accel;
+        inertia_.small_cross        =  model_params_.j_small * inertia_.big_accel;
+        inertia_.big_damping        =  kYawJointDamping      * inertia_.big_rate;
+        inertia_.small_damping      =  kYawJointDamping      * inertia_.small_rate;
+
+        return true;
     }
 
     /**
@@ -378,41 +618,85 @@ private:
      */
     void control_tick()
     {
-        if (!joints_.valid || !imu_.angle_valid || !imu_.rate_valid || !target_initialized_)
+        if (!joints_.valid || !imu_.angle_valid || !imu_.rate_valid || !reference_.target_initialized)
         {
             return;
         }
-        if (!big_reference_initialized_)
+        // 三路话题来自同一次仿真发布；避免新编码器与旧姿态拼出假的底盘转角。
+        if (joints_.stamp_ns != imu_.stamp_ns || imu_.rate_stamp_ns != imu_.stamp_ns)
         {
-            big_reference_radian_ = normalize_radian_pm_pi(joints_.q_big);
-            big_reference_initialized_ = true;
+            return;
         }
-        const double target_world_rate = keyboard_input_ * input_params_.target_rate_limit;
-        theta_des_world_ = normalize_radian_pm_pi(theta_des_world_ + target_world_rate * control_params_.control_period_s);
+        if (!reference_.big_initialized)
+        {
+            reference_.big = normalize_radian_pm_pi(joints_.q_big);
+            reference_.big_initialized = true;
+        }
+        update_base_kinematics();
+        if (!imu_.rate_valid)
+        {
+            return;
+        }
+        const bool   base_comp_active  = base_rate_params_.enable && base_yaw_.valid;
+        const double target_world_rate = input_.command * input_params_.target_rate_limit;
+        reference_.world = normalize_radian_pm_pi(reference_.world + target_world_rate * control_params_.control_period_s);
 
         // 由现有云台姿态和两轴编码器求底盘朝向，不增加底盘 IMU/速度反馈。
         // 只作坐标分配，不能把世界角反馈纠偏或积分混入大轴参考。
-        const double base_radian        = normalize_radian_pm_pi(imu_.yaw_world   - joints_.q_big - joints_.q_small);
-        const double target_body_radian = normalize_radian_pm_pi(theta_des_world_ - base_radian);
-        const double small_required     = radian_error_pm_pi(target_body_radian, big_reference_radian_);
+        const double base_radian        = base_comp_active ? base_yaw_.yaw : normalize_radian_pm_pi(imu_.yaw_world - joints_.q_big - joints_.q_small);
+        const double target_body_radian = normalize_radian_pm_pi(reference_.world - base_radian);
+        const double small_required     = radian_error_pm_pi(target_body_radian, reference_.big);
         const double small_allocated    = std::clamp(small_required, -limit_params_.small_soft_limit, limit_params_.small_soft_limit);
         const double allocation_excess  = small_required - small_allocated;
 
         // 限位内保持历史大轴参考，不能每拍跟随实际大轴角度而放任漂移。
         if (allocation_excess != 0.0)
         {
-            big_reference_radian_ = normalize_radian_pm_pi(big_reference_radian_ + allocation_excess);
+            reference_.big = normalize_radian_pm_pi(reference_.big + allocation_excess);
         }
 
+        // 位置分配只在超限时移动大轴；速度分配使用解析底盘航向速度。
+        const double body_reference_rate = target_world_rate - (base_comp_active ? base_yaw_.heading_rate : 0.0);
+        // 速度参考与真正发出的角度参考一致；不能在交接边缘按 >= soft_limit
+        // 将速度目标在 0 与 -base_rate 之间硬切换。
+        // 差分与滤波都跟随新的仿真反馈时间；旧样本重复控制时保持速度参考。
+        // 仿真变慢或反馈降频后，不能把一次数毫秒的位移除以固定 1 ms。
+        if (!reference_.rate_initialized || imu_.stamp_ns < reference_.rate_stamp_ns)
+        {
+            reference_.rate_reference = reference_.big;
+            reference_.rate_stamp_ns = imu_.stamp_ns;
+            reference_.big_rate = 0.0;
+            reference_.rate_initialized = true;
+        }
+        else if (imu_.stamp_ns > reference_.rate_stamp_ns)
+        {
+            const double sample_dt = (imu_.stamp_ns - reference_.rate_stamp_ns) * 1e-9;
+            const double allocated_big_rate = radian_error_pm_pi(reference_.big, reference_.rate_reference) / sample_dt;
+            const double reference_alpha = -std::expm1(-2.0 * M_PI * inertia_params_.reference_lpf_hz * sample_dt);
+            reference_.big_rate += reference_alpha * (allocated_big_rate - reference_.big_rate);
+            reference_.rate_reference = reference_.big;
+            reference_.rate_stamp_ns = imu_.stamp_ns;
+        }
+
+        const double big_rate_reference = reference_.big_rate;
+        // 小轴需抵消大轴实际速度，阻尼力矩按相对关节速度计算。
+        const double small_rate_reference = body_reference_rate - joints_.dq_big;
+        const bool   inertia_active = update_inertia_feedforward(big_rate_reference, body_reference_rate - big_rate_reference);
+
         YawLqr::State big_error;
-        big_error << radian_error_pm_pi(joints_.q_big, big_reference_radian_), joints_.dq_big;
+        big_error   << radian_error_pm_pi(joints_.q_big,  reference_.big), joints_.dq_big - (base_comp_active ? big_rate_reference : (inertia_active ? inertia_.big_rate : 0.0));
 
         YawLqr::State small_error;
-        small_error << radian_error_pm_pi(imu_.yaw_world, theta_des_world_), imu_.yaw_rate_world - target_world_rate;
+        small_error << radian_error_pm_pi(imu_.yaw_world, reference_.world), imu_.yaw_rate_world - target_world_rate;
 
         // 两个 LQR 都以误差为反馈、零为目标；小轴补偿大轴运动造成的世界角扰动。
-        const double big_raw   = big_joint_lqr_  .update(big_error,   YawLqr::State::Zero())(0);
-        const double small_raw = small_world_lqr_.update(small_error, YawLqr::State::Zero())(0);
+        const double big_feedback   = big_joint_lqr_  .update(big_error,   YawLqr::State::Zero())(0);
+        const double small_feedback = small_world_lqr_.update(small_error, YawLqr::State::Zero())(0);
+        const double big_damping    = base_comp_active ? kYawJointDamping    * big_rate_reference   : inertia_.big_damping;
+        const double small_damping  = base_comp_active ? kYawJointDamping    * small_rate_reference : inertia_.small_damping;
+        const double big_raw        = big_feedback     + inertia_.big_self   + inertia_.big_cross   + big_damping;
+        const double small_raw      = small_feedback   + inertia_.small_self + inertia_.small_cross + small_damping;
+
         const TorqueCommand command {
               std::clamp(big_raw,   -limit_params_.big_ctrl_limit,   limit_params_.big_ctrl_limit),
             std::clamp(small_raw, -limit_params_.small_ctrl_limit, limit_params_.small_ctrl_limit)
@@ -420,19 +704,35 @@ private:
 
         publish_torque(command);
 
-        RCLCPP_DEBUG_THROTTLE(get_logger(), *get_clock(), 100,
+        RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 20,
+            "yaw基座 t=%.6f active=%d sample_valid=%d age_ms=%.2f stamp_delta_ms=%.2f gyro_z=%.5f base_heading_rate=%.5f base_axis_rate=%.5f body_ref_rate=%.5f joint_ref_rate=(%.5f,%.5f) damping=(%.5f,%.5f)",
+            imu_.stamp_ns * 1e-9, base_comp_active ? 1 : 0, base_rate_.valid ? 1 : 0,
+            base_rate_.valid ? std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - base_rate_.received).count() : -1.0,
+            base_rate_.valid ? (imu_.stamp_ns - base_rate_.stamp_ns) * 1e-6 : 0.0,
+            imu_.gyro.z(), base_yaw_.heading_rate, base_yaw_.axis_rate, body_reference_rate,
+            big_rate_reference, small_rate_reference, big_damping, small_damping);
+
+        RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 20,
+            "yaw惯性 t=%.6f active=%d ref_rate=(%.5f,%.5f) ref_accel=(%.5f,%.5f) "
+            "fb=(%.5f,%.5f) self=(%.5f,%.5f) cross=(%.5f,%.5f) damping=(%.5f,%.5f) sent=(%.5f,%.5f)",
+            imu_.stamp_ns * 1e-9, inertia_active ? 1 : 0, inertia_.big_rate, inertia_.small_rate,
+            inertia_.big_accel, inertia_.small_accel, big_feedback, small_feedback,
+            inertia_.big_self, inertia_.small_self, inertia_.big_cross, inertia_.small_cross,
+            big_damping, small_damping, command.big, command.small);
+
+        RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 20,
             "yaw协同 sim_t=%.6f | world des/imu/err=(%.2f, %.2f, %.2f) deg rate/des=(%.4f, %.4f) rad/s | "
             "base_est/body_des=(%.2f, %.2f) deg | small required/alloc/q=(%.2f, %.2f, %.2f) deg dq=%.4f | "
             "big ref/q/err=(%.2f, %.2f, %.2f) deg dq=%.4f alloc_delta=%.4f deg | "
             "tau raw=(%.5f, %.5f) sent=(%.5f, %.5f) Nm | input=%.3f",
             imu_.stamp_ns*1e-9,
-            theta_des_world_*kRadToDeg, imu_.yaw_world*kRadToDeg, small_error(0)*kRadToDeg,
+            reference_.world*kRadToDeg, imu_.yaw_world*kRadToDeg, small_error(0)*kRadToDeg,
             imu_.yaw_rate_world, target_world_rate,
             base_radian*kRadToDeg, target_body_radian*kRadToDeg,
             small_required*kRadToDeg, small_allocated*kRadToDeg, joints_.q_small*kRadToDeg, joints_.dq_small,
-            big_reference_radian_*kRadToDeg, normalize_radian_pm_pi(joints_.q_big)*kRadToDeg,
+            reference_.big*kRadToDeg, normalize_radian_pm_pi(joints_.q_big)*kRadToDeg,
             big_error(0)*kRadToDeg, joints_.dq_big, allocation_excess*kRadToDeg,
-            big_raw, small_raw, command.big, command.small, keyboard_input_);
+            big_raw, small_raw, command.big, command.small, input_.command);
     }
 
     /**
@@ -444,8 +744,8 @@ private:
     {
         std_msgs::msg::Float64 msg;
         msg.data = command.big;
-        big_yaw_cmd_pub_->publish(msg);
+        ros_.big_yaw_cmd_pub  ->publish(msg);
         msg.data = command.small;
-        small_yaw_cmd_pub_->publish(msg);
+        ros_.small_yaw_cmd_pub->publish(msg);
     }
 };

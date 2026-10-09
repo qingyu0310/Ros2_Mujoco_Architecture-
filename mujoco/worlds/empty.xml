@@ -5,12 +5,15 @@
      后方 y=-4：横向路障和窄桥。机器人仍由仿真节点单独加载。 -->
 <mujoco model="empty">
 
-  <option timestep="0.001" integrator="implicitfast" gravity="0 0 -9.81" iterations="100"/>
+  <!-- 20 m/s 弹丸每步移动 2 mm，细化物理步长以解析摩擦轮接触。 -->
+  <option timestep="0.0001" integrator="implicitfast" gravity="0 0 -9.81" iterations="100"/>
 
   <!-- 全场打亮：headlight 是跟着相机走的头灯，把它的 ambient/diffuse 拉高，
        任何角度、任何面都不会落进死黑里；场景里那盏平行光只作方向补光。
        MuJoCo 的 headlight 默认 ambient 0.1 / diffuse 0.4，偏暗。 -->
   <visual>
+    <!-- 近裁剪面按场景 extent 缩放；小车第一人称需要保留近处厘米级几何。 -->
+    <map znear="0.001"/>
     <headlight ambient="0.6 0.6 0.6" diffuse="0.6 0.6 0.6" specular="0.1 0.1 0.1"/>
   </visual>
 

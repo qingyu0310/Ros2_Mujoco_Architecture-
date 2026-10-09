@@ -1,7 +1,7 @@
 /**
  * @file gimbal.cpp
  * @author qingyu
- * @brief 云台入口：同一进程里启动 yaw 节点和 pitch 节点
+ * @brief 云台入口：同一进程里启动 yaw、pitch 和摩擦轮节点
  * @version 0.1
  * @date 2026-10-07
  *
@@ -18,6 +18,7 @@
 #include <rclcpp/rclcpp.hpp>
 
 #include "ros2_layer/node/gimbal/pitch.hpp"
+#include "ros2_layer/node/gimbal/friction_wheel.hpp"
 #include "ros2_layer/node/gimbal/yaw.hpp"
 
 int main(int argc, char** argv)
@@ -45,9 +46,11 @@ int main(int argc, char** argv)
     rclcpp::executors::MultiThreadedExecutor executor;
     auto yaw_node = std::make_shared<YawNode>();
     auto pitch_node = std::make_shared<PitchNode>();
-    RCLCPP_INFO(rclcpp::get_logger("gimbal"), "云台入口已启动：内部节点 /yaw 和 /pitch 已接入 executor");
+    auto friction_wheel_node = std::make_shared<FrictionWheelNode>();
+    RCLCPP_INFO(rclcpp::get_logger("gimbal"), "云台入口已启动：内部节点 /yaw、/pitch 和 /friction_wheel 已接入 executor");
     executor.add_node(yaw_node);
     executor.add_node(pitch_node);
+    executor.add_node(friction_wheel_node);
     executor.spin();
 
     rclcpp::shutdown();

@@ -10,6 +10,7 @@
   <buildtool_depend>rosidl_default_generators</buildtool_depend>
 
   <depend>eigen</depend>
+  <depend>std_msgs</depend>
 
   <!-- modules/msg/ 下的消息：生成器（上面那条）+ 运行期的序列化支持 + 进 rosidl 接口包这一组 -->
   <exec_depend>rosidl_default_runtime</exec_depend>

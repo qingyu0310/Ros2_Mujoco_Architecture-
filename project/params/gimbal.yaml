@@ -9,8 +9,8 @@
     control_period_s: 0.001
     # 角度参数一律写度数，节点内部转弧度再控制（约定：参数=度，控制=rad）
     target_rate_limit_deg: 180.0
-    small_yaw_soft_limit_deg: 60.0
-    mouse_yaw_sensitivity: -5.0
+    small_yaw_soft_limit_deg: 120.0
+    mouse_yaw_sensitivity: -20.0
     big_yaw_ctrl_limit: 7.0
     small_yaw_ctrl_limit: 7.0
     # 大 yaw 相对关节角闭环，小 yaw IMU 世界角闭环。
@@ -22,6 +22,15 @@
     # 加在 M 的对角上。
     armature_big: 0.0018
     armature_small: 0.0018
+
+    # 固定底盘时，解析分配参考速度经低通后计算两轴惯性及阻尼前馈。
+    # 基座速度补偿来自 chassis 四轮实测转速反解，不订阅底盘 IMU。
+    yaw_base_rate_comp_enable: true
+    base_velocity_topic: "/chassis/velocity"
+    yaw_base_rate_timeout_s: 0.1
+    # Shift / Ctrl 或检测到基座转动时，暂关闭固定基座加速度前馈；速度补偿仍有效。
+    yaw_inertia_ff_enable: true
+    yaw_inertia_reference_lpf_hz: 15.0
 
     # 数组顺序：[大 yaw, 小 yaw]。大轴状态=[关节角误差, 关节速度]；
     # 小轴状态=[IMU 世界角误差, 世界角速度误差]，两个 LQR 的目标均为零。
@@ -53,6 +62,10 @@
     pitch_q_vel: 1.0
     pitch_r: 1.0
 
+    # ESO 只估计重力前馈后的残余扰动；关闭可恢复 LQR + 重力基线。
+    pitch_eso_enable: true
+    pitch_eso_bandwidth: 30.0  # rad/s
+
     # pitch 轴水平，枪管/摩擦轮在局部 +X 偏心；没有重力前馈时 0 度也会被重力拖下去。
     # tau_g = sign * mass * 9.81 * com_x * cos(q)
     pitch_gravity_comp_enable: true  # 第二轮开启重力补偿，与无补偿基线对比
@@ -64,3 +77,19 @@
     keyboard_topic: "/keyboard"
     joint_states_topic: "/joint_states"
     motor_topic_prefix: "/motor"
+
+/friction_wheel:
+  ros__parameters:
+    control_period_s: 0.001
+    # 输出轴角速度，左正右负；固定云台单发测试枪口速度约 20.7 m/s。
+    # 按住左键预热至稳定后装填；当前电机模型未包含真实转速/功率上限。
+    target_speed_rad_s: 1650.0
+    speed_kp: 0.02
+    speed_ki: 0.1
+    torque_limit: 3.0  # 与模型 M3508 P19 力矩范围一致
+    input_state_timeout_s: 0.2
+    keyboard_topic: "/keyboard"
+    joint_states_topic: "/joint_states"
+    motor_topic_prefix: "/motor"
+    left_joint: "pitch_barrel_friction_wheel_l_joint"
+    right_joint: "pitch_barrel_friction_wheel_r_joint"

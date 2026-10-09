@@ -25,6 +25,7 @@
 #include <std_msgs/msg/float64.hpp>
 
 #include "framework/algorithm/controller/lqr.hpp"
+#include "framework/algorithm/observer/eso.hpp"
 #include "framework/algorithm/math/angle.hpp"
 #include "framework/msg/keyboard_state.hpp"
 
@@ -131,6 +132,27 @@ private:
         bool valid {false};
     };
 
+    /**
+     * @brief 残差 ESO：上一采样区间的已限幅力矩减去重力前馈
+     */
+    struct ObserverParams
+    {
+        bool enable {true};
+        double bandwidth {30.0};  // rad/s
+    };
+
+    struct ObserverState
+    {
+        algorithm::observer::Eso3<double> eso {};
+        bool initialized {false};
+        double sample_time {0.0};
+        double previous_position {0.0};
+        double previous_input {0.0};  // N·m，tau_sent - tau_gravity_ff
+    };
+
+    ObserverParams observer_params_ {};
+    ObserverState observer_ {};
+
     Lqr lqr_ {};
 
     PitchSample pitch_ {};
@@ -177,6 +199,9 @@ private:
         gravity_params_.com_x           = declare_parameter("pitch_gravity_comp_com_x",    0.065);
         gravity_params_.sign            = declare_parameter("pitch_gravity_comp_sign",     -1.0);
 
+        observer_params_.enable         = declare_parameter("pitch_eso_enable", true);
+        observer_params_.bandwidth      = declare_parameter("pitch_eso_bandwidth", 30.0);
+
         joint_params_.pitch             = declare_parameter("pitch_joint",                 "pitch_pitch_joint");
 
         topic_params_.keyboard          = declare_parameter("keyboard_topic",              "/keyboard");
@@ -213,6 +238,10 @@ private:
      */
     void validate_parameters() const
     {
+        if (!std::isfinite(observer_params_.bandwidth) || !(observer_params_.bandwidth > 0.0))
+        {
+            throw std::runtime_error("pitch_eso_bandwidth must be finite and positive");
+        }
         if (!(timing_params_.control_period_s > 0.0) || !(control_params_.inertia > 0.0) || !(control_params_.r > 0.0))
         {
             throw std::runtime_error("pitch control_period_s/j_pitch/pitch_r must be positive");
@@ -266,6 +295,12 @@ private:
             if (msg->name[i] == joint_params_.pitch)
             {
                 sample.sim_time_s = static_cast<double>(msg->header.stamp.sec) + static_cast<double>(msg->header.stamp.nanosec) * 1e-9;
+                if (i >= msg->position.size() || i >= msg->velocity.size()
+                    || !std::isfinite(msg->position[i]) || !std::isfinite(msg->velocity[i]))
+                {
+                    sample.valid = false;
+                    break;
+                }
                 sample.q = msg->position[i];
                 sample.dq = msg->velocity[i];
                 sample.valid = true;
@@ -273,6 +308,44 @@ private:
             }
         }
         pitch_ = sample;
+    }
+
+    /**
+     * @brief 只在新关节采样上推进 ESO，以前一采样区间的输入解释运动
+     */
+    void update_observer()
+    {
+        if (!observer_params_.enable)
+        {
+            observer_.initialized = false;
+            return;
+        }
+
+        const double dt = pitch_.sim_time_s - observer_.sample_time;
+        if (!observer_.initialized || dt < 0.0 || dt > 0.1)
+        {
+            observer_.eso.reset(pitch_.q, pitch_.dq, 0.0);
+            observer_.initialized = true;
+            observer_.sample_time = pitch_.sim_time_s;
+            observer_.previous_position = pitch_.q;
+            observer_.previous_input = 0.0;
+            return;
+        }
+        if (dt == 0.0)
+        {
+            return;  // wall timer 重复读到同一仿真采样时不重复积分。
+        }
+
+        // 长采样间隔分步推进，保持连续带宽的欧拉离散步长。
+        const int steps = static_cast<int>(std::ceil(dt / timing_params_.control_period_s));
+        observer_.eso.configure(dt / steps, 1.0 / control_params_.inertia, observer_params_.bandwidth);
+        for (int i = 0; i < steps; ++i)
+        {
+            const double position = observer_.previous_position + (pitch_.q - observer_.previous_position) * (i + 1.0) / steps;
+            observer_.eso.update(position, observer_.previous_input);
+        }
+        observer_.sample_time = pitch_.sim_time_s;
+        observer_.previous_position = pitch_.q;
     }
 
     /**
@@ -284,6 +357,8 @@ private:
         {
             return;
         }
+
+        update_observer();
 
         const double pitch_rate = std::clamp(pitch_input_ * target_params_.rate_limit,     -std::abs(target_params_.rate_limit), std::abs(target_params_.rate_limit));
         pitch_des_ = std::clamp(pitch_des_ + pitch_rate * timing_params_.control_period_s, -std::abs(target_params_.soft_limit), std::abs(target_params_.soft_limit));
@@ -299,18 +374,21 @@ private:
 
         const double gravity_comp = gravity_params_.enable ? gravity_params_.sign * gravity_params_.mass * 9.81 * gravity_params_.com_x * std::cos(pitch_.q) : 0.0;
         const Lqr::Control u = lqr_.update(state, target);
-        const double tau = std::clamp(u(0) + gravity_comp, -std::abs(control_params_.ctrl_limit), std::abs(control_params_.ctrl_limit));
+        const double eso_comp = observer_params_.enable ? -control_params_.inertia * observer_.eso.state().z3 : 0.0;
+        const double tau_raw = u(0) + gravity_comp + eso_comp;
+        const double tau = std::clamp(tau_raw, -std::abs(control_params_.ctrl_limit), std::abs(control_params_.ctrl_limit));
 
         std_msgs::msg::Float64 msg;
         msg.data = tau;
         pitch_cmd_pub_->publish(msg);
+        observer_.previous_input = tau - gravity_comp;
 
         // 对比实验：时间来自关节消息（仿真时间），角度 deg、速度 rad/s、力矩 N·m。
         RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 100,
-                             "pitch t=%.4f g_on=%d q_deg=%.3f des_deg=%.3f dq_rad_s=%.4f lqr_Nm=%.5f grav_Nm=%.5f cmd_Nm=%.5f sat=%d",
+                             "pitch t=%.4f g_on=%d q_deg=%.3f des_deg=%.3f dq_rad_s=%.4f lqr_Nm=%.5f grav_Nm=%.5f eso_Nm=%.5f z3=%.5f cmd_Nm=%.5f sat=%d",
                              pitch_.sim_time_s, gravity_params_.enable ? 1 : 0,
                              pitch_.q * kRadToDeg, pitch_des_ * kRadToDeg, pitch_.dq,
-                             u(0), gravity_comp, tau,
-                             std::abs(u(0) + gravity_comp) > std::abs(control_params_.ctrl_limit) ? 1 : 0);
+                             u(0), gravity_comp, eso_comp, observer_.eso.state().z3, tau,
+                             std::abs(tau_raw) > std::abs(control_params_.ctrl_limit) ? 1 : 0);
     }
 };

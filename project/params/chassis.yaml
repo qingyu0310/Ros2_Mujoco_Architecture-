@@ -5,14 +5,16 @@
 
 /chassis:
   ros__parameters:
+    # 实测轮速反解的底盘系 vx/vy/wz，保留 joint_states 时间戳。
+    velocity_topic: "/chassis/velocity"
     control_period_s: 0.001     # 控制拍周期（1 kHz）
-    forward_speed: 0.6          # W/S 满程线速度（m/s），沿枪管方向
-    strafe_speed: 0.6           # A/D 满程线速度（m/s），A 为枪管左侧、D 为枪管右侧；订阅者自己解释 key_down
+    forward_speed: 1.0          # W/S 满程线速度（m/s），沿枪管方向
+    strafe_speed: 1.0           # A/D 满程线速度（m/s），A 为枪管左侧、D 为枪管右侧；订阅者自己解释 key_down
     spin_yaw_rate_deg: 360.0    # Shift 按住进入小陀螺模式时的底盘自转角速度（deg/s）
     # Ctrl 长按：反馈 wrap(q_big + q_small)，目标取最近的 0/90/180/270 度，PID 输出底盘角速度。
     # 同时按 Ctrl/Shift 时 Ctrl 优先；松开 Ctrl 后按当前 Shift 状态决定是否自转。
-    follow_kp: 3.0
-    follow_ki: 0.0
+    follow_kp: 5.0
+    follow_ki: 1.0
     follow_kd: 0.0
     follow_rate_limit_deg_s: 180.0
     follow_integral_limit_deg_s: 0.0

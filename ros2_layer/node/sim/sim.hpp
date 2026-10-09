@@ -44,6 +44,7 @@
 #include <sensor_msgs/msg/imu.hpp>
 #include <sensor_msgs/msg/joint_state.hpp>
 #include <std_msgs/msg/float64.hpp>
+#include "framework/msg/keyboard_state.hpp"
 
 #include <simulate/glfw_adapter.h>
 #include <simulate/simulate.h>
@@ -84,6 +85,7 @@ public:
             throw std::runtime_error(std::string("sim: 加载模型失败：") + error);
         }
         data_ = mj_makeData(model_);
+        setup_projectiles();
 
         mjv_defaultCamera(&camera_);
         mjv_defaultOption(&option_);
@@ -186,7 +188,7 @@ public:
         // 只有云台那一路：底盘不挂 IMU，`/imu` 已删
         add_imu_channel("gimbal_imu", declare_parameter("gimbal_imu_topic", "/gimbal/imu"), "pitch_link");
 
-        pub_period_ = declare_parameter("publish_period_s", model_->opt.timestep);
+        pub_period_ = declare_parameter("publish_period_s", 0.001);
 
         // 力矩超时：没了 motor 节点中转，掉线松力矩这道安全网挪到这里。
         // 每一路执行器独立计时，收到过指令才开始盯
@@ -299,6 +301,7 @@ public:
                         sim_->InjectNoise(sim_->key);
                         enforce_command_timeout();
                         executor.spin_some();
+                        update_projectiles();
                         mj_step(model_, data_);
                     }
                     else
@@ -314,6 +317,7 @@ public:
                             sim_->InjectNoise(sim_->key);
                             enforce_command_timeout();
                             executor.spin_some();
+                            update_projectiles();
                             mj_step(model_, data_);
                         }
                     }
@@ -360,6 +364,146 @@ public:
     }
 
 private:
+    struct ProjectileState
+    {
+        int body;
+        int geom;
+        int qpos;
+        int dof;
+        bool active {false};
+        bool muzzle_reported {false};
+    };
+
+    struct LauncherState
+    {
+        std::vector<ProjectileState> balls;
+        int feed_site {-1};
+        bool pending {false};
+        bool right_held {false};
+        std::uint64_t shots {0};
+        double last_load {-1.0};
+        double last_time {0.0};
+        rclcpp::Subscription<framework::msg::KeyboardState>::SharedPtr keyboard;
+    } launcher_;
+
+    void setup_projectiles()
+    {
+        launcher_.feed_site = mj_name2id(model_, mjOBJ_SITE, "pitch_barrel_projectile_feed");
+        if (launcher_.feed_site < 0) return;
+        for (int i = 0; i < 4; ++i)
+        {
+            const std::string name = "projectile_" + std::to_string(i);
+            const int body = mj_name2id(model_, mjOBJ_BODY, name.c_str());
+            const int geom = mj_name2id(model_, mjOBJ_GEOM, (name + "_geom").c_str());
+            const int joint = mj_name2id(model_, mjOBJ_JOINT, (name + "_joint").c_str());
+            if (body < 0 || geom < 0 || joint < 0) continue;
+            launcher_.balls.push_back({body, geom, model_->jnt_qposadr[joint], model_->jnt_dofadr[joint]});
+        }
+        launcher_.keyboard = create_subscription<framework::msg::KeyboardState>(declare_parameter("keyboard_topic", "/keyboard"), 10,
+            [this](const framework::msg::KeyboardState::SharedPtr msg)
+            {
+                // 只用按下沿，长按右键不会连发；暂停时仅保留一次装填请求。
+                if (msg->mouse_right && !launcher_.right_held) launcher_.pending = true;
+                launcher_.right_held = msg->mouse_right;
+            });
+    }
+
+    void update_projectiles()
+    {
+        if (launcher_.feed_site < 0) return;
+        const bool reset = data_->time < launcher_.last_time;
+        launcher_.last_time = data_->time;
+        for (auto& ball : launcher_.balls)
+        {
+            if (ball.active && !ball.muzzle_reported && !reset)
+            {
+                const mjtNum* rotation = data_->site_xmat + 9 * launcher_.feed_site;
+                const mjtNum axis[3] {rotation[0], rotation[3], rotation[6]};
+                mjtNum offset[3];
+                mju_sub3(offset, data_->xpos + 3 * ball.body, data_->site_xpos + 3 * launcher_.feed_site);
+                // 装填点 x=0.050，枪口 x=0.109；以弹丸中心越过枪口为测量时刻。
+                if (mju_dot3(offset, axis) >= 0.059)
+                {
+                    const int parent = model_->site_bodyid[launcher_.feed_site];
+                    mjtNum parent_velocity[6], ball_velocity[6], arm[3], tangential[3], relative[3];
+                    mj_objectVelocity(model_, data_, mjOBJ_BODY, parent, parent_velocity, 0);
+                    mj_objectVelocity(model_, data_, mjOBJ_BODY, ball.body, ball_velocity, 0);
+                    mju_sub3(arm, data_->xpos + 3 * ball.body, data_->xipos + 3 * parent);
+                    mju_cross(tangential, parent_velocity, arm);
+                    mju_sub3(relative, ball_velocity + 3, parent_velocity + 3);
+                    mju_sub3(relative, relative, tangential);
+                    RCLCPP_INFO(get_logger(), "弹丸枪口轴向速度=%.2f m/s（相对枪管）", mju_dot3(relative, axis));
+                    ball.muzzle_reported = true;
+                }
+            }
+            if (reset) ball.active = false;
+            if (!ball.active)
+            {
+                model_->body_contype[ball.body] = 0;
+                model_->body_conaffinity[ball.body] = 0;
+                model_->geom_contype[ball.geom] = 0;
+                model_->geom_conaffinity[ball.geom] = 0;
+                mju_copy(data_->qpos + ball.qpos, model_->qpos0 + ball.qpos, 7);
+                mju_zero(data_->qvel + ball.dof, 6);
+            }
+        }
+        if (reset)
+        {
+            launcher_.pending = false;
+            launcher_.last_load = -1.0;
+            launcher_.shots = 0;
+        }
+        if (!launcher_.pending) return;
+        launcher_.pending = false;
+        if (data_->time - launcher_.last_load < 0.15) return;
+        mj_forward(model_, data_);
+        const mjtNum* feed = data_->site_xpos + 3 * launcher_.feed_site;
+        // 装填点尚有弹丸时拒绝重叠装填。
+        for (const auto& ball : launcher_.balls)
+        {
+            if (ball.active && mju_dist3(data_->xpos + 3 * ball.body, feed) < 0.025) return;
+        }
+        if (launcher_.balls.size() != 4) return;
+        {
+            // 第 3 次装填回收第 1 颗，第 4 次回收第 2 颗；最多保留两发在场。
+            if (launcher_.shots >= 2)
+            {
+                auto& recycled = launcher_.balls[(launcher_.shots - 2) % 4];
+                recycled.active = false;
+                recycled.muzzle_reported = false;
+                model_->body_contype[recycled.body] = 0;
+                model_->body_conaffinity[recycled.body] = 0;
+                model_->geom_contype[recycled.geom] = 0;
+                model_->geom_conaffinity[recycled.geom] = 0;
+                mju_copy(data_->qpos + recycled.qpos, model_->qpos0 + recycled.qpos, 7);
+                mju_zero(data_->qvel + recycled.dof, 6);
+            }
+            auto& ball = launcher_.balls[launcher_.shots % 4];
+            mju_copy3(data_->qpos + ball.qpos, feed);
+            data_->qpos[ball.qpos + 3] = 1.0;
+            mju_zero(data_->qpos + ball.qpos + 4, 3);
+            // 继承装填点的刚体速度；不添加枪口速度，由摩擦轮接触加速。
+            const int parent = model_->site_bodyid[launcher_.feed_site];
+            mjtNum velocity[6], offset[3], tangential[3];
+            mj_objectVelocity(model_, data_, mjOBJ_BODY, parent, velocity, 0);
+            mju_sub3(offset, feed, data_->xipos + 3 * parent);
+            mju_cross(tangential, velocity, offset);
+            mju_add3(data_->qvel + ball.dof, velocity + 3, tangential);
+            mju_copy3(data_->qvel + ball.dof + 3, velocity);
+            model_->body_contype[ball.body] = 1;
+            model_->body_conaffinity[ball.body] = 1;
+            model_->geom_contype[ball.geom] = 1;
+            model_->geom_conaffinity[ball.geom] = 1;
+            ball.active = true;
+            ball.muzzle_reported = false;
+            launcher_.last_load = data_->time;
+            ++launcher_.shots;
+            mj_forward(model_, data_);
+            RCLCPP_INFO(get_logger(), "装填 17mm 弹丸：%s", mj_id2name(model_, mjOBJ_BODY, ball.body));
+            return;
+        }
+    }
+
     // 界面：Simulate 存的是这三个的引用，它们得比 sim_ 先构造、后析构
     mjvCamera  camera_ {};
     mjvOption  option_ {};

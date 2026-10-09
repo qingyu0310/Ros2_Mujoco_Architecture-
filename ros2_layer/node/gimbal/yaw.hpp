@@ -61,7 +61,6 @@ private:
 
     static constexpr double kDegToRad = M_PI / 180.0;
     static constexpr double kRadToDeg = 180.0 / M_PI;
-
     static constexpr double kYawJointDamping = 0.002;
 
     /**
@@ -183,8 +182,8 @@ private:
      */
     struct JointParams
     {
-        std::string big_yaw_joint   {"big_yaw_joint"};
-        std::string small_yaw_joint {"small_yaw_joint"};
+        std::string big_yaw_joint       {"big_yaw_joint"};
+        std::string small_yaw_joint     {"small_yaw_joint"};
     };
 
     /**
@@ -192,11 +191,11 @@ private:
      */
     struct TopicParams
     {
-        std::string keyboard_topic     {"/keyboard"};
-        std::string joint_states_topic {"/joint_states"};
-        std::string motor_topic_prefix {"/motor"};
-        std::string yaw_angle_topic    {"/gimbal/imu/euler_rad"};
-        std::string yaw_rate_topic     {"/gimbal/imu/angular_velocity"};
+        std::string keyboard_topic      {"/keyboard"};
+        std::string joint_states_topic  {"/joint_states"};
+        std::string motor_topic_prefix  {"/motor"};
+        std::string yaw_angle_topic     {"/gimbal/imu/euler_rad"};
+        std::string yaw_rate_topic      {"/gimbal/imu/angular_velocity"};
         std::string base_velocity_topic {"/chassis/velocity"};
     };
 
@@ -218,14 +217,17 @@ private:
      */
     struct ImuSample
     {
-        Eigen::Vector3d rpy {Eigen::Vector3d::Zero()};
+        Eigen::Vector3d rpy  {Eigen::Vector3d::Zero()};
         Eigen::Vector3d gyro {Eigen::Vector3d::Zero()};
-        std::int64_t rate_stamp_ns {0};
+
         double yaw_world {0.0};
         double yaw_rate_world {0.0};
+
+        std::int64_t rate_stamp_ns {0};
         std::int64_t stamp_ns {0};
+
         bool angle_valid {false};
-        bool rate_valid {false};
+        bool rate_valid  {false};
     };
 
     /**

@@ -78,6 +78,11 @@ add_executable(chassis node/chassis/chassis.cpp)
 target_link_libraries(chassis ros2_layer::ros2_layer ament_index_cpp::ament_index_cpp)
 install(TARGETS chassis DESTINATION lib/${PROJECT_NAME})
 
+# 发射（摩擦轮）：左键长按送弹。节点本体在 ros2_layer/node/shooter/shooter.hpp
+add_executable(shooter node/shooter/shooter.cpp)
+target_link_libraries(shooter ros2_layer::ros2_layer ament_index_cpp::ament_index_cpp)
+install(TARGETS shooter DESTINATION lib/${PROJECT_NAME})
+
 install(DIRECTORY params launch
     DESTINATION share/${PROJECT_NAME})
 

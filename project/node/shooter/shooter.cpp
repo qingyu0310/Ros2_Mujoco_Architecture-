@@ -1,11 +1,14 @@
 /**
- * @file gimbal.cpp
+ * @file shooter.cpp
  * @author qingyu
- * @brief 云台入口：同一进程里启动 yaw、pitch 节点
+ * @brief 本项目的发射（摩擦轮）节点入口：直接用 ros2 层的 ShooterNode
  * @version 0.1
- * @date 2026-10-07
+ * @date 2026-10-09
  *
  * @copyright Copyright (c) 2026
+ *
+ * @note 这里只有入口。节点本体在 ros2_layer/node/shooter/shooter.hpp。
+ *       参数文件 params/shooter.yaml 自己从 install 里找（同 keyboard.cpp 的套路）
  */
 
 #include <filesystem>
@@ -14,17 +17,15 @@
 #include <vector>
 
 #include <ament_index_cpp/get_package_share_directory.hpp>
-#include <rclcpp/executors/multi_threaded_executor.hpp>
 #include <rclcpp/rclcpp.hpp>
 
-#include "ros2_layer/node/gimbal/pitch.hpp"
-#include "ros2_layer/node/gimbal/yaw.hpp"
+#include "ros2_layer/node/shooter/shooter.hpp"
 
 int main(int argc, char** argv)
 {
+    // 参数文件走命令行（--ros-args --params-file），不走 NodeOptions::arguments（rcl 会静默忽略）
     std::vector<std::string> arg_strings(argv, argv + argc);
-    const std::string share_dir = ament_index_cpp::get_package_share_directory("project");
-    const std::string params_file = share_dir + "/params/gimbal.yaml";
+    const std::string params_file = ament_index_cpp::get_package_share_directory("project") + "/params/shooter.yaml";
 
     if (std::filesystem::exists(params_file))
     {
@@ -35,6 +36,7 @@ int main(int argc, char** argv)
 
     std::vector<char const*> args;
     args.reserve(arg_strings.size());
+
     for (const auto& arg : arg_strings)
     {
         args.push_back(arg.c_str());
@@ -42,14 +44,9 @@ int main(int argc, char** argv)
 
     rclcpp::init(static_cast<int>(args.size()), args.data());
 
-    rclcpp::executors::MultiThreadedExecutor executor;
-    auto yaw_node = std::make_shared<YawNode>();
-    auto pitch_node = std::make_shared<PitchNode>();
-    RCLCPP_INFO(rclcpp::get_logger("gimbal"), "云台入口已启动：内部节点 /yaw、/pitch 已接入 executor");
-    executor.add_node(yaw_node);
-    executor.add_node(pitch_node);
-    executor.spin();
+    rclcpp::spin(std::make_shared<ShooterNode>());
 
     rclcpp::shutdown();
+
     return 0;
 }

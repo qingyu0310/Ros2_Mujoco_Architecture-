@@ -77,19 +77,3 @@
     keyboard_topic: "/keyboard"
     joint_states_topic: "/joint_states"
     motor_topic_prefix: "/motor"
-
-/friction_wheel:
-  ros__parameters:
-    control_period_s: 0.001
-    # 输出轴角速度，左正右负；固定云台单发测试枪口速度约 20.7 m/s。
-    # 按住左键预热至稳定后装填；当前电机模型未包含真实转速/功率上限。
-    target_speed_rad_s: 1650.0
-    speed_kp: 0.02
-    speed_ki: 0.1
-    torque_limit: 3.0  # 与模型 M3508 P19 力矩范围一致
-    input_state_timeout_s: 0.2
-    keyboard_topic: "/keyboard"
-    joint_states_topic: "/joint_states"
-    motor_topic_prefix: "/motor"
-    left_joint: "pitch_barrel_friction_wheel_l_joint"
-    right_joint: "pitch_barrel_friction_wheel_r_joint"

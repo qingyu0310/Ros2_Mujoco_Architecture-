@@ -58,6 +58,14 @@ def generate_launch_description():
         output='screen',
     )
 
+    # 发射：摩擦轮节点，左键长按送弹。name 必须跟 params/shooter.yaml 的 /shooter 段对上。
+    shooter = Node(
+        package='project',
+        executable='shooter',
+        name='shooter',
+        output='screen',
+    )
+
     keyboard = Node(
         package='project',
         executable='keyboard',
@@ -80,4 +88,4 @@ def generate_launch_description():
         )
     )
 
-    return LaunchDescription([robot_arg, sim, imu, gimbal, chassis, keyboard, overhead_camera, shutdown_on_keyboard_exit])
+    return LaunchDescription([robot_arg, sim, imu, gimbal, chassis, shooter, keyboard, overhead_camera, shutdown_on_keyboard_exit])
